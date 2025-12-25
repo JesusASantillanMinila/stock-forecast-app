@@ -273,7 +273,7 @@ if run_button:
 
                 # Forecast Data
                 # Filter forecast to only show the future part + slightly overlapping for visual continuity
-                future_forecast = forecast[forecast['ds'] > df_data['ds'].max()]
+                future_forecast = forecast[forecast['ds'] > pd.Timestamp(df_data['ds'].max())]
                 
                 fig.add_trace(go.Scatter(
                     x=future_forecast['ds'],
