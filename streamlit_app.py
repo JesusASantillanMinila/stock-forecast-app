@@ -17,7 +17,7 @@ st.title("📈 Stock Forecasting Engine")
 with st.sidebar:
     st.header("Configuration")
     
-    var_ticker_input = st.text_input("Stock Ticker", value="AAPL").upper()
+    var_ticker_input = st.text_input("Stock Ticker", value="").upper()
     var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=48, step=6)
     var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=2, step=1)
     
@@ -210,7 +210,7 @@ if run_button:
     with st.spinner('Fetching Company Profile...'):
         t_info = yf.Ticker(var_ticker_input).info
         st.subheader(t_info.get('longName', var_ticker_input))
-        st.info(t_info.get('longBusinessSummary', 'No summary currently available.'))
+        # st.info(t_info.get('longBusinessSummary', 'No summary currently available.'))
     # -----------------------------
 
     with st.spinner('Downloading Data and Preprocessing...'):
