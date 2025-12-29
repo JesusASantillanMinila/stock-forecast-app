@@ -312,7 +312,7 @@ if run_button:
                         xanchor="center",
                         x=0.5
                     )
-                )
+                
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
