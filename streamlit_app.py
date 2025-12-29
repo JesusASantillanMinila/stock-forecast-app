@@ -209,7 +209,7 @@ if run_button:
     # --- Add company info
     with st.spinner('Fetching Company Profile...'):
         t_info = yf.Ticker(var_ticker_input).info
-        st.subheader(t_info.get('longName', var_ticker_input))
+        # st.subheader(t_info.get('longName', var_ticker_input))
         # st.info(t_info.get('longBusinessSummary', 'No summary currently available.'))
     # -----------------------------
 
