@@ -149,7 +149,7 @@ def run_prophet_competition(df, history_months):
     """
     Runs the regressor competition loop.
     """
-    potential_regressors = ['Volume', 'Reported EPS', 'Dividends', 'VIX_Close']
+    potential_regressors = ['Volume', 'Reported EPS', 'Dividends', 'Volatility Index Close']
     
     # Filter only columns that actually exist in the dataframe
     available_regressors = [r for r in potential_regressors if r in df.columns]
