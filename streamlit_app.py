@@ -230,12 +230,9 @@ if run_button:
             with col1:
                 st.success("Optimization Complete!")
                 st.metric(label="Lowest RMSE (Error)", value=f"{best_rmse:.4f}")
-                st.write("**Winning Regressors:**")
+                st.write("**Best Regressors for this stock:**")
                 for feature in best_combo:
                     st.code(feature)
-                
-                with st.expander("See all combinations tested"):
-                    st.dataframe(results_df.sort_values("RMSE"))
 
             # --- FORECASTING FUTURE ---
             future = best_model.make_future_dataframe(periods=var_future_fcst_mo*30) ## Bring in forecasted 
