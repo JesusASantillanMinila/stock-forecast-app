@@ -235,7 +235,7 @@ if run_button:
         # We populate the placeholder we created at the top
         with company_info_placeholder.container():
             st.markdown(f"## {meta_data['longName']}")
-            with st.expander("Show Business Summary", expanded=True):
+            with st.expander("Show Business Summary", expanded=False):
                 st.write(meta_data['longBusinessSummary'])
             st.divider()
 
