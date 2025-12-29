@@ -19,7 +19,7 @@ with st.sidebar:
     
     var_ticker_input = st.text_input("Stock Ticker", value="AAPL").upper()
     var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=48, step=6)
-    var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=2, step=6)
+    var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=2, step=1)
     
     # Placeholder for future algorithms
     algo_choice = st.selectbox(
