@@ -304,7 +304,7 @@ if run_button:
                     yaxis_title="Price",
                     hovermode="x unified",
                     template="plotly_white",
-                    margin=dict(l=0, r=0, t=0, b=0)
+                    margin=dict(l=0, r=0, t=0, b=0),
                     legend=dict(
                         orientation="h",
                         yanchor="bottom",
@@ -312,7 +312,6 @@ if run_button:
                         xanchor="center",
                         x=0.5
                     )
-                
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
