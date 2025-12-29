@@ -49,10 +49,11 @@ def get_stock_data(ticker, months):
                 "longName": t_info.get("longName", ticker),
                 "longBusinessSummary": t_info.get("longBusinessSummary", "No summary available.")
             }
-        except:
+        except Exception as e:
             metadata = {
                 "longName": ticker,
-                "longBusinessSummary": "Company summary could not be retrieved."
+                # "longBusinessSummary": "Company summary could not be retrieved."
+                "longBusinessSummary": e
             }
         
         # 1. Download Stock Price
