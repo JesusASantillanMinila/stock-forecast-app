@@ -212,10 +212,6 @@ if run_button:
     if error:
         st.error(f"Error: {error}")
     else:
-        # Display Raw Data Snippet
-        with st.expander("View Raw Data Snippet"):
-            st.dataframe(df_data.tail())
-
         # Run Competition
         st.subheader("Model Optimization")
         
@@ -308,7 +304,3 @@ if run_button:
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
-
-            # --- FORECAST DATA TABLE ---
-            st.subheader("Forecast Data (Next 5 Days)")
-            st.dataframe(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
