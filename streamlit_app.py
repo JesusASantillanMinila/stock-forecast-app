@@ -8,11 +8,6 @@ from itertools import combinations
 import plotly.graph_objects as go
 import datetime
 
-# --- DATABASE IMPORTS (Commented out for local execution without DB credentials) ---
-# import snowflake.connector
-# from snowflake.connector.pandas_tools import write_pandas
-# from sqlalchemy import create_engine
-
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Stock Forecast Pro", layout="wide")
 
@@ -24,6 +19,7 @@ with st.sidebar:
     
     var_ticker_input = st.text_input("Stock Ticker", value="AAPL").upper()
     var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=48, step=6)
+    var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=2, step=6)
     
     # Placeholder for future algorithms
     algo_choice = st.selectbox(
@@ -246,7 +242,7 @@ if run_button:
                     st.dataframe(results_df.sort_values("RMSE"))
 
             # --- FORECASTING FUTURE ---
-            future = best_model.make_future_dataframe(periods=60) # 60 Day Forecast
+            future = best_model.make_future_dataframe(periods=var_future_fcst_mo*30) ## Bring in forecasted 
             
             # Forward fill future regressors (Naive approach as per original code)
             for reg in best_combo:
