@@ -11,7 +11,7 @@ import datetime
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Stock Forecast Pro", layout="wide")
 
-st.title("📈 Stock Forecasting Engine")
+st.title("Stock Forecasting Engine")
 
 # --- placeholder for company info ---
 company_info_placeholder = st.empty()
