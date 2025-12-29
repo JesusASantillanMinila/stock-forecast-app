@@ -206,13 +206,6 @@ if run_button:
     if algo_choice != "Facebook Prophet":
         st.warning(f"{algo_choice} is not yet implemented. Using Prophet logic as placeholder.")
 
-    # --- Add company info
-    with st.spinner('Fetching Company Profile...'):
-        t_info = yf.Ticker(var_ticker_input).info
-        # st.subheader(t_info.get('longName', var_ticker_input))
-        # st.info(t_info.get('longBusinessSummary', 'No summary currently available.'))
-    # -----------------------------
-
     with st.spinner('Downloading Data and Preprocessing...'):
         df_data, error = get_stock_data(var_ticker_input, var_past_horizon_mo)
 
