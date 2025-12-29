@@ -206,6 +206,13 @@ if run_button:
     if algo_choice != "Facebook Prophet":
         st.warning(f"{algo_choice} is not yet implemented. Using Prophet logic as placeholder.")
 
+    # --- Add company info
+    with st.spinner('Fetching Company Profile...'):
+        t_info = yf.Ticker(var_ticker_input).info
+        st.subheader(t_info.get('longName', var_ticker_input))
+        st.info(t_info.get('longBusinessSummary', 'No summary currently available.'))
+    # -----------------------------
+
     with st.spinner('Downloading Data and Preprocessing...'):
         df_data, error = get_stock_data(var_ticker_input, var_past_horizon_mo)
 
@@ -229,7 +236,7 @@ if run_button:
             
             with col1:
                 st.success("Optimization Complete!")
-                st.metric(label="Lowest RMSE (Error)", value=f"{best_rmse:.4f}")
+                
                 st.write("**Best Regressors for this stock:**")
                 for feature in best_combo:
                     st.code(feature)
@@ -298,6 +305,14 @@ if run_button:
                     hovermode="x unified",
                     template="plotly_white",
                     margin=dict(l=0, r=0, t=0, b=0)
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=-0.2,
+                        xanchor="center",
+                        x=0.5
+                    )
+                )
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
