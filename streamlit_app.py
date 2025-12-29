@@ -13,6 +13,9 @@ st.set_page_config(page_title="Stock Forecast Pro", layout="wide")
 
 st.title("📈 Stock Forecasting Engine")
 
+# --- placeholder for company info ---
+company_info_placeholder = st.empty()
+
 # --- SIDEBAR INPUTS ---
 with st.sidebar:
     st.header("Configuration")
@@ -33,10 +36,24 @@ with st.sidebar:
 @st.cache_data(ttl=3600) # Cache data for 1 hour
 def get_stock_data(ticker, months):
     """
-    Fetches Stock, VIX, Dividends, and Earnings data based on user input.
+    Fetches Stock, VIX, Dividends, Earnings data AND Company Metadata.
     """
     try:
         var_ticker_class = yf.Ticker(ticker)
+        
+        # 0. Fetch Company Metadata (Name & Summary)
+        # We use a try/except block specifically for metadata so it doesn't fail the whole forecast if missing
+        try:
+            t_info = var_ticker_class.info
+            metadata = {
+                "longName": t_info.get("longName", ticker),
+                "longBusinessSummary": t_info.get("longBusinessSummary", "No summary available.")
+            }
+        except:
+            metadata = {
+                "longName": ticker,
+                "longBusinessSummary": "Company summary could not be retrieved."
+            }
         
         # 1. Download Stock Price
         df_stock_price = yf.download(ticker, period=f'{months}mo', progress=False)
@@ -51,7 +68,7 @@ def get_stock_data(ticker, months):
         df_stock_price = df_stock_price.reset_index(drop=True)
 
         if df_stock_price.empty:
-            return None, "No price data found for ticker."
+            return None, None, "No price data found for ticker."
 
         # 2. Get Dividends
         try:
@@ -121,10 +138,10 @@ def get_stock_data(ticker, months):
         if 'Volatility Index Close' in df_prophet.columns: df_prophet['Volatility Index Close'] = df_prophet['Volatility Index Close'].ffill().bfill()
         if 'Volume' in df_prophet.columns: df_prophet['Volume'] = df_prophet['Volume'].ffill().bfill()
         
-        return df_prophet, None
+        return df_prophet, metadata, None
         
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
 # --- MODEL TRAINING FUNCTION ---
 def run_prophet_competition(df, history_months):
@@ -207,11 +224,20 @@ if run_button:
         st.warning(f"{algo_choice} is not yet implemented. Using Prophet logic as placeholder.")
 
     with st.spinner('Downloading Data and Preprocessing...'):
-        df_data, error = get_stock_data(var_ticker_input, var_past_horizon_mo)
+        # Unpack the 3 return values
+        df_data, meta_data, error = get_stock_data(var_ticker_input, var_past_horizon_mo)
 
     if error:
         st.error(f"Error: {error}")
     else:
+        # --- DISPLAY COMPANY INFO ---
+        # We populate the placeholder we created at the top
+        with company_info_placeholder.container():
+            st.markdown(f"## {meta_data['longName']}")
+            with st.expander("Show Business Summary", expanded=True):
+                st.write(meta_data['longBusinessSummary'])
+            st.divider()
+
         # Run Competition
         st.subheader("Model Optimization")
         
