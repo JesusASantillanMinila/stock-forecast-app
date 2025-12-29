@@ -100,7 +100,7 @@ def get_stock_data(ticker, months):
         df_vix["Date"] = pd.to_datetime(df_vix.index, errors='coerce')
         df_vix["Date"] = df_vix["Date"].dt.date
         df_vix = df_vix.reset_index(drop=True)
-        df_vix = df_vix.add_prefix('VIX_')
+        df_vix = df_vix.add_prefix('Volatility Index ')
 
         # Merge VIX
         df_fcst_input = pd.merge(
@@ -108,7 +108,7 @@ def get_stock_data(ticker, months):
             df_vix,
             how='left',
             left_on="Date",
-            right_on="VIX_Date"
+            right_on="Volatility Index Date"
         )
         
         # Final Prep for Prophet
@@ -118,7 +118,7 @@ def get_stock_data(ticker, months):
         # We fill with 0 for Dividends/EPS (event based) and ffill for VIX/Volume
         if 'Dividends' in df_prophet.columns: df_prophet['Dividends'] = df_prophet['Dividends'].fillna(0)
         if 'Reported EPS' in df_prophet.columns: df_prophet['Reported EPS'] = df_prophet['Reported EPS'].fillna(0)
-        if 'VIX_Close' in df_prophet.columns: df_prophet['VIX_Close'] = df_prophet['VIX_Close'].ffill().bfill()
+        if 'Volatility Index Close' in df_prophet.columns: df_prophet['Volatility Index Close'] = df_prophet['Volatility Index Close'].ffill().bfill()
         if 'Volume' in df_prophet.columns: df_prophet['Volume'] = df_prophet['Volume'].ffill().bfill()
         
         return df_prophet, None
