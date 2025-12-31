@@ -39,11 +39,13 @@ def get_stock_data(ticker, months):
     Fetches Stock, VIX, Dividends, Earnings data AND Company Metadata.
     """
     try:
+        time.sleep(1)
         var_ticker_class = yf.Ticker(ticker)
         
         # 0. Fetch Company Metadata (Name & Summary)
         # We use a try/except block specifically for metadata so it doesn't fail the whole forecast if missing
         try:
+            time.sleep(1)
             t_info = var_ticker_class.info
             metadata = {
                 "longName": t_info.get("longName", ticker),
