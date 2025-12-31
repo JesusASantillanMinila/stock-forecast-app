@@ -4,5 +4,5 @@ numpy
 yfinance
 prophet
 plotly
+tensorflow
 scikit-learn
-tensorflow-cpu
