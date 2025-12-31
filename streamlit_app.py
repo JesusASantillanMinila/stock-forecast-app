@@ -7,6 +7,7 @@ from prophet.diagnostics import cross_validation, performance_metrics
 from itertools import combinations
 import plotly.graph_objects as go
 import datetime
+import time
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Stock Forecast Pro", layout="wide")
