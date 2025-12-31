@@ -9,11 +9,12 @@ import plotly.graph_objects as go
 import datetime
 import time
 
+# --- NEW IMPORTS FOR LSTM ---
 from sklearn.preprocessing import MinMaxScaler
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.layers import Dropout
-
+from tensorflow.keras.optimizers import Adam
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Stock Forecast Pro", layout="wide")
@@ -34,7 +35,7 @@ with st.sidebar:
     # Updated Algo Choice
     algo_choice = st.selectbox(
         "Forecasting Algorithm", 
-        ("Facebook Prophet", "LSTM (Deep Learning)")
+        ("Facebook Prophet", "LSTM (Deep Learning)", "ARIMA (Coming Soon)")
     )
     
     run_button = st.button("Run Forecast", type="primary")
@@ -50,7 +51,6 @@ def get_stock_data(ticker, months):
         var_ticker_class = yf.Ticker(ticker)
         
         # 0. Fetch Company Metadata (Name & Summary)
-        # We use a try/except block specifically for metadata so it doesn't fail the whole forecast if missing
         try:
             time.sleep(1)
             t_info = var_ticker_class.info
@@ -61,7 +61,7 @@ def get_stock_data(ticker, months):
         except Exception as e:
             metadata = {
                 "longName": ticker,
-                "longBusinessSummary": f"Company summary could not be retrieved. ({str(e)})"
+                "longBusinessSummary": str(e)
             }
         
         # 1. Download Stock Price
@@ -113,7 +113,6 @@ def get_stock_data(ticker, months):
             df_eps = pd.DataFrame(columns=['Date', 'Reported EPS'])
 
         # Merge EPS
-        # Rename column to ensure consistency
         if 'Reported EPS' in df_eps.columns:
             df_fcst_input = pd.merge(df_fcst_input, df_eps[['Date', 'Reported EPS']], how='left', on="Date")
         else:
@@ -140,8 +139,7 @@ def get_stock_data(ticker, months):
         # Final Prep for Prophet
         df_prophet = df_fcst_input.rename(columns={'Date': 'ds', 'Close': 'y'})
         
-        # Fill NaNs for regressors (Prophet crashes with NaNs in regressors)
-        # We fill with 0 for Dividends/EPS (event based) and ffill for VIX/Volume
+        # Fill NaNs for regressors
         if 'Dividends' in df_prophet.columns: df_prophet['Dividends'] = df_prophet['Dividends'].fillna(0)
         if 'Reported EPS' in df_prophet.columns: df_prophet['Reported EPS'] = df_prophet['Reported EPS'].fillna(0)
         if 'Volatility Index Close' in df_prophet.columns: df_prophet['Volatility Index Close'] = df_prophet['Volatility Index Close'].ffill().bfill()
@@ -152,14 +150,13 @@ def get_stock_data(ticker, months):
     except Exception as e:
         return None, None, str(e)
 
-# --- PROPHET MODEL TRAINING FUNCTION ---
+# --- PROPHET TRAINING FUNCTION ---
 def run_prophet_competition(df, history_months):
     """
     Runs the regressor competition loop.
     """
     potential_regressors = ['Volume', 'Reported EPS', 'Dividends', 'Volatility Index Close']
     
-    # Filter only columns that actually exist in the dataframe
     available_regressors = [r for r in potential_regressors if r in df.columns]
     
     best_rmse = float('inf')
@@ -169,7 +166,6 @@ def run_prophet_competition(df, history_months):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # Calculate total iterations for progress bar
     total_combos = sum(1 for r in range(1, len(available_regressors) + 1) 
                        for _ in combinations(available_regressors, r))
     current_iter = 0
@@ -188,10 +184,8 @@ def run_prophet_competition(df, history_months):
             
             m.fit(df)
             
-            # Dynamic Cross Validation Params based on history length
-            # If history is short, we reduce the initial training period
             days_history = history_months * 30
-            initial_days = f"{int(days_history * 0.5)} days" # Use 50% for training
+            initial_days = f"{int(days_history * 0.5)} days"
             
             try:
                 df_cv = cross_validation(
@@ -215,7 +209,6 @@ def run_prophet_competition(df, history_months):
                     best_regressor_combo = regressor_list
                     
             except Exception as e:
-                # Often fails if data is too short for CV
                 pass
             
             current_iter += 1
@@ -226,143 +219,105 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
-def run_lstm_forecast(df, months_forecast):
+# --- LSTM TRAINING FUNCTION (NEW) ---
+def run_lstm_forecast(df, future_months):
     """
-    Runs LSTM model predicting Log Returns (Velocity) instead of Raw Price (Position).
-    This prevents "runaway" forecasts.
+    Runs a Univariate LSTM model with gradient clipping.
+    Returns a dataframe formatted exactly like Prophet's 'forecast' df.
     """
-    # 1. Feature Engineering: Calculate Log Returns
-    # Log Return = ln(Today / Yesterday). This makes the data stationary.
-    df = df.copy()
-    df['Log_Ret'] = np.log(df['y'] / df['y'].shift(1))
+    # 1. Prepare Data
+    data = df[['ds', 'y']].sort_values('ds')
+    dataset = data['y'].values.reshape(-1, 1)
     
-    # We must drop the first row (NaN) created by the shift
-    df = df.dropna()
-
-    # 2. Setup Data & Regressors
-    potential_regressors = ['Volume', 'Reported EPS', 'Dividends', 'Volatility Index Close']
-    available_regressors = [r for r in potential_regressors if r in df.columns]
-    
-    # Feature columns: Predict 'Log_Ret' using 'Log_Ret' + Regressors
-    feature_cols = ['Log_Ret'] + available_regressors
-    data = df[feature_cols].values
-    
-    # 3. Scale Data
-    # Returns are small (e.g., 0.01), but regressors like Volume are huge. Scaling is crucial.
     scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(data)
+    scaled_data = scaler.fit_transform(dataset)
     
-    # 4. Create Sequences
+    # Lookback window (steps in the past to look at)
     look_back = 60 
-    X, y = [], []
+    
+    X_train, y_train = [], []
     for i in range(look_back, len(scaled_data)):
-        X.append(scaled_data[i-look_back:i])
-        y.append(scaled_data[i, 0]) # Predict 'Log_Ret' (index 0)
+        X_train.append(scaled_data[i-look_back:i, 0])
+        y_train.append(scaled_data[i, 0])
         
-    X, y = np.array(X), np.array(y)
+    X_train, y_train = np.array(X_train), np.array(y_train)
+    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
     
-    # 5. Build Model (Improved Architecture)
+    # 2. Build LSTM Model
+    # Designed to be lightweight for Free Tier
     model = Sequential()
-    # Return_sequences=True allows stacking LSTM layers
-    model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], X.shape[2])))
-    model.add(Dropout(0.2)) # Prevents overfitting/memorization
-    model.add(LSTM(units=50, return_sequences=False))
-    model.add(Dropout(0.2))
-    model.add(Dense(units=25))
-    model.add(Dense(units=1))
+    model.add(LSTM(units=50, return_sequences=False, input_shape=(X_train.shape[1], 1)))
+    model.add(Dense(1))
     
-    model.compile(optimizer='adam', loss='mean_squared_error')
+    # --- CRITICAL: GRADIENT EXPLOSION CONTROL ---
+    # Using clipnorm=1.0 to ensure gradients do not exceed 1.0
+    optimizer = Adam(learning_rate=0.001, clipnorm=1.0)
     
-    # Progress indication
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    status_text.text("Training Robust LSTM (Returns based)...")
+    model.compile(optimizer=optimizer, loss='mean_squared_error')
     
-    model.fit(X, y, batch_size=32, epochs=20, verbose=0)
-    progress_bar.progress(100)
+    # Train (Verbose=0 to keep logs clean)
+    model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
     
-    # 6. Future Forecasting (Recursive on Returns)
-    future_days = months_forecast * 30
-    curr_seq = scaled_data[-look_back:]
+    # 3. Forecast Future
+    # Start with the last 'look_back' days from the data
+    current_batch = scaled_data[-look_back:].reshape((1, look_back, 1))
+    predicted_prices = []
     
-    future_log_returns = []
-    future_dates = []
-    last_date = df['ds'].iloc[-1]
-    
-    # Regressor Logic: Instead of pure ffill, we use the MEAN of the last 30 days 
-    # for future regressors to provide a "neutral" signal, avoiding runaway bullishness.
-    recent_regressors_mean = np.mean(scaled_data[-30:, 1:], axis=0)
-    
-    status_text.text("Generating Future Forecast...")
+    future_days = future_months * 30
     
     for i in range(future_days):
-        # Predict next Log Return (scaled)
-        curr_seq_reshaped = curr_seq.reshape(1, look_back, len(feature_cols))
-        next_pred_scaled = model.predict(curr_seq_reshaped, verbose=0)[0, 0]
+        # Predict next step
+        next_pred = model.predict(current_batch, verbose=0)[0]
+        predicted_prices.append(next_pred)
         
-        # Prepare next input row
-        # We use the predicted return + the NEUTRAL mean regressors
-        next_row = np.hstack(([next_pred_scaled], recent_regressors_mean))
+        # Update batch: remove first item, add new prediction
+        next_pred_reshaped = next_pred.reshape((1, 1, 1))
+        current_batch = np.append(current_batch[:, 1:, :], next_pred_reshaped, axis=1)
         
-        # Update sequence
-        curr_seq = np.vstack((curr_seq[1:], next_row))
-        
-        # Inverse transform ONLY the predicted return to get actual log return value
-        # We create a dummy row to feed into inverse_transform
-        dummy_row = np.zeros(len(feature_cols))
-        dummy_row[0] = next_pred_scaled
-        unscaled_row = scaler.inverse_transform(dummy_row.reshape(1, -1))
-        pred_log_ret = unscaled_row[0, 0]
-        
-        future_log_returns.append(pred_log_ret)
-        
-        # Increment Date
-        last_date += datetime.timedelta(days=1)
-        while last_date.weekday() > 4: # Skip weekends
-            last_date += datetime.timedelta(days=1)
-        future_dates.append(last_date)
-
-    # 7. Reconstruct Price from Log Returns
-    # Formula: Price_t = Price_{t-1} * exp(Log_Return_t)
-    last_actual_price = df['y'].iloc[-1]
-    future_prices = []
+    # Inverse transform predictions
+    predicted_prices = scaler.inverse_transform(np.array(predicted_prices).reshape(-1, 1))
     
-    curr_price = last_actual_price
-    for log_ret in future_log_returns:
-        next_price = curr_price * np.exp(log_ret)
-        future_prices.append(next_price)
-        curr_price = next_price
-        
-    # Calculate simple error bands (Naive volatility based)
-    # We assume future volatility is similar to recent historical volatility
-    hist_volatility = df['Log_Ret'].std() * np.sqrt(len(future_prices)) # Scaling volatility
-    # This is a simplification for visualization
-    upper_band = [p * (1 + (0.05 * i/30)) for i, p in enumerate(future_prices)] # Widens over time
-    lower_band = [p * (1 - (0.05 * i/30)) for i, p in enumerate(future_prices)]
-
-    # 8. Format Output
+    # 4. Estimate Uncertainty (Mocking Prophet's intervals)
+    # We calculate RMSE on the training set to create a simple confidence band
+    train_predict = model.predict(X_train, verbose=0)
+    train_predict = scaler.inverse_transform(train_predict)
+    y_train_inv = scaler.inverse_transform([y_train])
+    
+    rmse = np.sqrt(np.mean(((train_predict - y_train_inv.T) ** 2)))
+    
+    # 5. Construct DataFrame matching Prophet format
+    last_date = data['ds'].max()
+    future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
+    
+    # Create the future dataframe
     df_future = pd.DataFrame({
-        'ds': future_dates,
-        'yhat': future_prices,
-        'yhat_lower': lower_band,
-        'yhat_upper': upper_band
+        'ds': pd.to_datetime(future_dates),
+        'yhat': predicted_prices.flatten()
     })
     
-    df_future['ds'] = pd.to_datetime(df_future['ds'])
+    # Add simple uncertainty intervals (approx 95% CI assuming normal errors)
+    df_future['yhat_lower'] = df_future['yhat'] - (1.96 * rmse)
+    df_future['yhat_upper'] = df_future['yhat'] + (1.96 * rmse)
     
-    status_text.empty()
-    progress_bar.empty()
+    # We also need to attach historical data to this dataframe to match Prophet's 'forecast' object
+    # Prophet returns the Whole history + future.
+    df_history = data.copy()
+    df_history['yhat'] = df_history['y'] # For history, prediction is actual (simplification for viz)
+    df_history['yhat_lower'] = df_history['y']
+    df_history['yhat_upper'] = df_history['y']
     
-    # We calculate a pseudo-RMSE for the UI based on the last known price to keep the return format consistent
-    rmse = 0.0 # Placeholder as we changed methodology
+    # Concatenate
+    df_final = pd.concat([df_history, df_future], ignore_index=True)
+    df_final['ds'] = pd.to_datetime(df_final['ds'])
     
-    return model, available_regressors, rmse, df_future
+    return df_final, rmse
 
 # --- MAIN APP LOGIC ---
 
 if run_button:
     if algo_choice == "ARIMA (Coming Soon)":
-        st.warning("ARIMA is not yet implemented.")
+         st.warning("ARIMA is not yet implemented.")
+         st.stop()
 
     with st.spinner('Downloading Data and Preprocessing...'):
         # Unpack the 3 return values
@@ -379,115 +334,136 @@ if run_button:
                 st.write(meta_data['longBusinessSummary'])
             st.divider()
 
-        # Run Selected Model
-        st.subheader("Model Optimization")
-        
         # Check if we have enough data for the requested horizon
         if len(df_data) < 180:
             st.warning("Data history is very short. Forecast quality may be low.")
             
-        future_forecast = pd.DataFrame() # Initialize
-        
+        forecast = None
+        best_combo = []
+
+        # --- BRANCH: FACEBOOK PROPHET ---
         if algo_choice == "Facebook Prophet":
+            st.subheader("Model Optimization (Prophet)")
             best_model, best_combo, best_rmse, results_df = run_prophet_competition(df_data, var_past_horizon_mo)
-            
+
             if best_model is None:
-                st.error("Could not find a valid model.")
+                st.error("Could not find a valid model. Try increasing the history lookback period.")
             else:
-                 # Generate Future Dataframe
+                 # Success Message
+                st.success(f"Optimization Complete! Best RMSE: {best_rmse:.2f}")
+                st.write("**Best Regressors for this stock:**")
+                st.write(", ".join(best_combo) if best_combo else "None (Univariate)")
+
+                # FORECASTING FUTURE
                 future = best_model.make_future_dataframe(periods=var_future_fcst_mo*30) 
-                # Forward fill future regressors
+                
+                # Forward fill future regressors 
                 for reg in best_combo:
                     last_known_value = df_data[reg].iloc[-1]
                     future[reg] = df_data[reg] # Fill historical
                     future[reg] = future[reg].fillna(last_known_value) # Fill future
 
                 forecast = best_model.predict(future)
-                future_forecast = forecast # Standard Prophet Output
-                
+
+        # --- BRANCH: LSTM ---
         elif algo_choice == "LSTM (Deep Learning)":
-            best_model, best_combo, best_rmse, forecast_df = run_lstm_forecast(df_data, var_future_fcst_mo)
+            st.subheader("Model Training (LSTM)")
+            status_text = st.empty()
+            status_text.text("Initializing TensorFlow & scaling data...")
+            progress_bar = st.progress(0)
             
-            # For plotting consistency, we append the historical data to the forecast dataframe
-            # But the plotting logic below filters `future_forecast` by date > max(history)
-            # So we just need to ensure `future_forecast` contains the future rows with yhat/ds
-            future_forecast = forecast_df
+            # Run LSTM
+            try:
+                progress_bar.progress(30)
+                status_text.text("Training LSTM Network (this may take a moment)...")
+                
+                forecast, train_rmse = run_lstm_forecast(df_data, var_future_fcst_mo)
+                
+                progress_bar.progress(100)
+                status_text.text("Training Complete.")
+                time.sleep(1)
+                status_text.empty()
+                progress_bar.empty()
+                
+                st.success(f"LSTM Training Complete! Training RMSE: {train_rmse:.2f}")
+                st.info("Note: Uncertainty intervals for LSTM are approximated using training error.")
+                best_combo = ["LSTM (Univariate)", "Gradient Clipping: True"]
+                
+            except Exception as e:
+                st.error(f"LSTM Training Failed: {e}")
 
-        # --- RESULTS SECTION ---
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            st.success("Optimization Complete!")
+        # --- RESULTS SECTION (Unified for both models) ---
+        if forecast is not None:
+            col1, col2 = st.columns([1, 2])
             
-            st.write(f"**Model:** {algo_choice}")
-            st.write(f"**Training RMSE:** {best_rmse:.4f}")
-            
-            st.write("**Features Used:**")
-            for feature in best_combo:
-                st.code(feature)
+            with col1:
+                # If it's prophet, we already showed the regressors. 
+                # If LSTM, we show model details.
+                if algo_choice == "LSTM (Deep Learning)":
+                    st.write("**Model Parameters:**")
+                    for feat in best_combo:
+                        st.code(feat)
 
-        # --- INTERACTIVE PLOTLY CHART ---
-        with col2:
-            st.subheader(f"Forecast: {var_ticker_input}")
-            
-            fig = go.Figure()
+            # --- INTERACTIVE PLOTLY CHART ---
+            with col2:
+                st.subheader(f"Forecast: {var_ticker_input}")
+                
+                fig = go.Figure()
 
-            # Historical Data (Actuals)
-            fig.add_trace(go.Scatter(
-                x=df_data['ds'], 
-                y=df_data['y'],
-                mode='lines',
-                name='Historical Data',
-                line=dict(color='deepskyblue')
-            ))
+                # Historical Data (Actuals) - We use df_data for the pure actuals
+                fig.add_trace(go.Scatter(
+                    x=df_data['ds'], 
+                    y=df_data['y'],
+                    mode='lines',
+                    name='Historical Data',
+                    line=dict(color='deepskyblue')
+                ))
 
-            # Forecast Data
-            # Filter forecast to only show the future part
-            # Note: For LSTM, future_forecast already only contains future data, 
-            # but for Prophet it contains history+future. The filter below handles both cases safely.
-            plot_forecast = future_forecast[future_forecast['ds'] > pd.Timestamp(df_data['ds'].max())]
-            
-            fig.add_trace(go.Scatter(
-                x=plot_forecast['ds'],
-                y=plot_forecast['yhat'],
-                mode='lines',
-                name='Forecast',
-                line=dict(color='orangered')
-            ))
+                # Forecast Data
+                # Filter forecast to only show the future part + slightly overlapping 
+                future_forecast = forecast[forecast['ds'] > pd.Timestamp(df_data['ds'].max())]
+                
+                fig.add_trace(go.Scatter(
+                    x=future_forecast['ds'],
+                    y=future_forecast['yhat'],
+                    mode='lines',
+                    name='Forecast',
+                    line=dict(color='orangered')
+                ))
 
-            # Uncertainty Intervals (Upper/Lower bounds)
-            fig.add_trace(go.Scatter(
-                x=plot_forecast['ds'],
-                y=plot_forecast['yhat_upper'],
-                mode='lines',
-                line=dict(width=0),
-                showlegend=False,
-                hoverinfo='skip'
-            ))
-            
-            fig.add_trace(go.Scatter(
-                x=plot_forecast['ds'],
-                y=plot_forecast['yhat_lower'],
-                mode='lines',
-                fill='tonexty', # Fill area between upper and lower
-                fillcolor='rgba(255, 69, 0, 0.2)',
-                line=dict(width=0),
-                name='Uncertainty Interval'
-            ))
+                # Uncertainty Intervals (Upper/Lower bounds)
+                fig.add_trace(go.Scatter(
+                    x=future_forecast['ds'],
+                    y=future_forecast['yhat_upper'],
+                    mode='lines',
+                    line=dict(width=0),
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+                
+                fig.add_trace(go.Scatter(
+                    x=future_forecast['ds'],
+                    y=future_forecast['yhat_lower'],
+                    mode='lines',
+                    fill='tonexty', # Fill area between upper and lower
+                    fillcolor='rgba(255, 69, 0, 0.2)',
+                    line=dict(width=0),
+                    name='Uncertainty Interval'
+                ))
 
-            fig.update_layout(
-                xaxis_title="Date",
-                yaxis_title="Price",
-                hovermode="x unified",
-                template="plotly_white",
-                margin=dict(l=0, r=0, t=0, b=0),
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=-0.2,
-                    xanchor="center",
-                    x=0.5
+                fig.update_layout(
+                    xaxis_title="Date",
+                    yaxis_title="Price",
+                    hovermode="x unified",
+                    template="plotly_white",
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=-0.2,
+                        xanchor="center",
+                        x=0.5
+                    )
                 )
-            )
 
-            st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True)
