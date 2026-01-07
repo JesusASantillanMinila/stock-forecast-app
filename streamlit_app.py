@@ -81,9 +81,9 @@ def get_stock_data(ticker, months):
             return None, None, "No price data found for ticker."
 
         # --- NEW: CALCULATE MOVING AVERAGES ---
-        df_stock_price['Moving Average 3 Months'] = df_stock_price['Close'].rolling(window=63).mean()
-        df_stock_price['Moving Average 6 Months'] = df_stock_price['Close'].rolling(window=126).mean()
-        df_stock_price['Moving Average 12 Months'] = df_stock_price['Close'].rolling(window=252).mean()
+        df_stock_price['Moving Average 50 Days'] = df_stock_price['Close'].rolling(window=63).mean()
+        df_stock_price['Moving Average 100 Days'] = df_stock_price['Close'].rolling(window=126).mean()
+        df_stock_price['Moving Average 200 Days'] = df_stock_price['Close'].rolling(window=252).mean()
 
         # --- NEW: SLICE DATA BACK TO REQUESTED RANGE ---
         max_date = pd.to_datetime(df_stock_price['Date']).max()
@@ -179,9 +179,9 @@ def run_prophet_competition(df, history_months):
         , 'Reported EPS'
         , 'Dividends'
         # , 'Volatility Index Close'
-        , 'Moving Average 3 Months'
-        # , 'Moving Average 6 Months'
-        , 'Moving Average 12 Months'
+        , 'Moving Average 50 Days'
+        # , 'Moving Average 100 Days'
+        , 'Moving Average 200 Days'
     ]
     
     # Filter only columns that actually exist in the dataframe
