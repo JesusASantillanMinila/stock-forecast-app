@@ -40,16 +40,22 @@ def get_stock_data(ticker, months):
     Fetches Stock, VIX, Dividends, Earnings data AND Company Metadata.
     """
     try:
-        time.sleep(1)
+        
         var_ticker_class = yf.Ticker(ticker)
+        time.sleep(1)
         
         # 0. Fetch Company Metadata (Name & Summary)
         try:
-            time.sleep(1)
+            
             t_info = var_ticker_class.info
+            time.sleep(1)
+            var_long_name = t_info.get("longName", ticker)
+            time.sleep(1)
+            var_business_summary = t_info.get("longBusinessSummary", "No summary available.")
+            
             metadata = {
-                "longName": t_info.get("longName", ticker),
-                "longBusinessSummary": t_info.get("longBusinessSummary", "No summary available.")
+                "longName": var_long_name,
+                "longBusinessSummary": var_business_summary
             }
         except Exception as e:
             metadata = {
@@ -152,7 +158,7 @@ def get_stock_data(ticker, months):
         if 'Reported EPS' in df_prophet.columns: df_prophet['Reported EPS'] = df_prophet['Reported EPS'].fillna(0)
         
         # Fill Forward/Back for continuous variables
-        cols_to_fill = ['Volatility Index Close', 'Volume', 'MA3', 'MA6', 'MA12']
+        cols_to_fill = ['Volatility Index Close', 'Volume', 'Moving Average 3 Months', 'Moving Average 6 Months', 'Moving Average 12 Months']
         for col in cols_to_fill:
             if col in df_prophet.columns:
                 df_prophet[col] = df_prophet[col].ffill().bfill()
