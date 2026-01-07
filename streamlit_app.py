@@ -169,8 +169,13 @@ def run_prophet_competition(df, history_months):
     """
     
     potential_regressors = [
-        'Volume', 'Reported EPS', 'Dividends', 
-        'Volatility Index Close', 'Moving Average 3 Months', 'Moving Average 6 Months', 'Moving Average 12 Months'
+        'Volume'
+        , 'Reported EPS'
+        , 'Dividends'
+        # , 'Volatility Index Close'
+        , 'Moving Average 3 Months'
+        # , 'Moving Average 6 Months'
+        , 'Moving Average 12 Months'
     ]
     
     # Filter only columns that actually exist in the dataframe
