@@ -266,7 +266,7 @@ def run_lstm_model(df, forecast_months):
     scaled_data = scaler.fit_transform(data)
     
     # Create Sequences
-    look_back = 60 # Look back 60 days
+    look_back = 100 # Look back 60 days
     X, y = [], []
     for i in range(look_back, len(scaled_data)):
         X.append(scaled_data[i-look_back:i, 0])
@@ -399,7 +399,7 @@ if run_button:
                 st.success("LSTM Network Trained!")
                 st.write("**Model Architecture:**")
                 st.code("Layers: LSTM(50) -> LSTM(50) -> Dense(25) -> Dense(1)")
-                st.write("Lookback Window: 60 Days")
+                st.write(f"Lookback Window: {look_back} Days")
 
         # --- SHARED PLOTTING LOGIC ---
         if forecast_results is not None:
