@@ -9,13 +9,6 @@ import plotly.graph_objects as go
 import datetime
 import time
 
-# --- NEW IMPORTS FOR LSTM ---
-from sklearn.preprocessing import MinMaxScaler
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.optimizers import Adam
-
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Stock Forecast Pro", layout="wide")
 
@@ -32,10 +25,10 @@ with st.sidebar:
     var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=48, step=6)
     var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=2, step=1)
     
-    # Updated Algo Choice
+    # Placeholder for future algorithms
     algo_choice = st.selectbox(
         "Forecasting Algorithm", 
-        ("Facebook Prophet", "LSTM (Deep Learning)", "ARIMA (Coming Soon)")
+        ("Facebook Prophet", "ARIMA (Coming Soon)", "LSTM (Coming Soon)")
     )
     
     run_button = st.button("Run Forecast", type="primary")
@@ -61,11 +54,13 @@ def get_stock_data(ticker, months):
         except Exception as e:
             metadata = {
                 "longName": ticker,
-                "longBusinessSummary": str(e)
+                "longBusinessSummary": e
             }
         
         # 1. Download Stock Price
-        df_stock_price = yf.download(ticker, period=f'{months}mo', progress=False)
+        # Fetch an extra 12 months to calculate the 12-month moving average correctly
+        fetch_months = months + 12
+        df_stock_price = yf.download(ticker, period=f'{fetch_months}mo', progress=False)
         
         # Handle yfinance multi-index columns if present
         if isinstance(df_stock_price.columns, pd.MultiIndex):
@@ -78,6 +73,18 @@ def get_stock_data(ticker, months):
 
         if df_stock_price.empty:
             return None, None, "No price data found for ticker."
+
+        # --- NEW: CALCULATE MOVING AVERAGES ---
+        df_stock_price['Moving Average 3 Months'] = df_stock_price['Close'].rolling(window=63).mean()
+        df_stock_price['Moving Average 6 Months'] = df_stock_price['Close'].rolling(window=126).mean()
+        df_stock_price['Moving Average 12 Months'] = df_stock_price['Close'].rolling(window=252).mean()
+
+        # --- NEW: SLICE DATA BACK TO REQUESTED RANGE ---
+        max_date = pd.to_datetime(df_stock_price['Date']).max()
+        cutoff_date = (max_date - pd.DateOffset(months=months)).date()
+        
+        # Filter for the requested period
+        df_stock_price = df_stock_price[df_stock_price['Date'] > cutoff_date].reset_index(drop=True)
 
         # 2. Get Dividends
         try:
@@ -119,8 +126,9 @@ def get_stock_data(ticker, months):
             df_fcst_input['Reported EPS'] = np.nan
 
         # 4. Get VIX Data
+        # We fetch the extended period for VIX too, then merge will handle the filtering automatically
         var_ticker_class_vix = yf.Ticker("^VIX")
-        df_vix = var_ticker_class_vix.history(period=f'{months}mo')
+        df_vix = var_ticker_class_vix.history(period=f'{fetch_months}mo')
         df_vix.index.name = None
         df_vix["Date"] = pd.to_datetime(df_vix.index, errors='coerce')
         df_vix["Date"] = df_vix["Date"].dt.date
@@ -142,21 +150,30 @@ def get_stock_data(ticker, months):
         # Fill NaNs for regressors
         if 'Dividends' in df_prophet.columns: df_prophet['Dividends'] = df_prophet['Dividends'].fillna(0)
         if 'Reported EPS' in df_prophet.columns: df_prophet['Reported EPS'] = df_prophet['Reported EPS'].fillna(0)
-        if 'Volatility Index Close' in df_prophet.columns: df_prophet['Volatility Index Close'] = df_prophet['Volatility Index Close'].ffill().bfill()
-        if 'Volume' in df_prophet.columns: df_prophet['Volume'] = df_prophet['Volume'].ffill().bfill()
+        
+        # Fill Forward/Back for continuous variables
+        cols_to_fill = ['Volatility Index Close', 'Volume', 'MA3', 'MA6', 'MA12']
+        for col in cols_to_fill:
+            if col in df_prophet.columns:
+                df_prophet[col] = df_prophet[col].ffill().bfill()
         
         return df_prophet, metadata, None
         
     except Exception as e:
         return None, None, str(e)
 
-# --- PROPHET TRAINING FUNCTION ---
+# --- MODEL TRAINING FUNCTION ---
 def run_prophet_competition(df, history_months):
     """
     Runs the regressor competition loop.
     """
-    potential_regressors = ['Volume', 'Reported EPS', 'Dividends', 'Volatility Index Close']
     
+    potential_regressors = [
+        'Volume', 'Reported EPS', 'Dividends', 
+        'Volatility Index Close', 'Moving Average 3 Months', 'Moving Average 6 Months', 'Moving Average 12 Months'
+    ]
+    
+    # Filter only columns that actually exist in the dataframe
     available_regressors = [r for r in potential_regressors if r in df.columns]
     
     best_rmse = float('inf')
@@ -166,6 +183,7 @@ def run_prophet_competition(df, history_months):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    # Calculate total iterations for progress bar
     total_combos = sum(1 for r in range(1, len(available_regressors) + 1) 
                        for _ in combinations(available_regressors, r))
     current_iter = 0
@@ -184,6 +202,7 @@ def run_prophet_competition(df, history_months):
             
             m.fit(df)
             
+            # Dynamic Cross Validation Params based on history length
             days_history = history_months * 30
             initial_days = f"{int(days_history * 0.5)} days"
             
@@ -219,105 +238,11 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
-# --- LSTM TRAINING FUNCTION (NEW) ---
-def run_lstm_forecast(df, future_months):
-    """
-    Runs a Univariate LSTM model with gradient clipping.
-    Returns a dataframe formatted exactly like Prophet's 'forecast' df.
-    """
-    # 1. Prepare Data
-    data = df[['ds', 'y']].sort_values('ds')
-    dataset = data['y'].values.reshape(-1, 1)
-    
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(dataset)
-    
-    # Lookback window (steps in the past to look at)
-    look_back = 60 
-    
-    X_train, y_train = [], []
-    for i in range(look_back, len(scaled_data)):
-        X_train.append(scaled_data[i-look_back:i, 0])
-        y_train.append(scaled_data[i, 0])
-        
-    X_train, y_train = np.array(X_train), np.array(y_train)
-    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
-    
-    # 2. Build LSTM Model
-    # Designed to be lightweight for Free Tier
-    model = Sequential()
-    model.add(LSTM(units=50, return_sequences=False, input_shape=(X_train.shape[1], 1)))
-    model.add(Dense(1))
-    
-    # --- CRITICAL: GRADIENT EXPLOSION CONTROL ---
-    # Using clipnorm=1.0 to ensure gradients do not exceed 1.0
-    optimizer = Adam(learning_rate=0.001, clipnorm=1.0)
-    
-    model.compile(optimizer=optimizer, loss='mean_squared_error')
-    
-    # Train (Verbose=0 to keep logs clean)
-    model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
-    
-    # 3. Forecast Future
-    # Start with the last 'look_back' days from the data
-    current_batch = scaled_data[-look_back:].reshape((1, look_back, 1))
-    predicted_prices = []
-    
-    future_days = future_months * 30
-    
-    for i in range(future_days):
-        # Predict next step
-        next_pred = model.predict(current_batch, verbose=0)[0]
-        predicted_prices.append(next_pred)
-        
-        # Update batch: remove first item, add new prediction
-        next_pred_reshaped = next_pred.reshape((1, 1, 1))
-        current_batch = np.append(current_batch[:, 1:, :], next_pred_reshaped, axis=1)
-        
-    # Inverse transform predictions
-    predicted_prices = scaler.inverse_transform(np.array(predicted_prices).reshape(-1, 1))
-    
-    # 4. Estimate Uncertainty (Mocking Prophet's intervals)
-    # We calculate RMSE on the training set to create a simple confidence band
-    train_predict = model.predict(X_train, verbose=0)
-    train_predict = scaler.inverse_transform(train_predict)
-    y_train_inv = scaler.inverse_transform([y_train])
-    
-    rmse = np.sqrt(np.mean(((train_predict - y_train_inv.T) ** 2)))
-    
-    # 5. Construct DataFrame matching Prophet format
-    last_date = data['ds'].max()
-    future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
-    
-    # Create the future dataframe
-    df_future = pd.DataFrame({
-        'ds': pd.to_datetime(future_dates),
-        'yhat': predicted_prices.flatten()
-    })
-    
-    # Add simple uncertainty intervals (approx 95% CI assuming normal errors)
-    df_future['yhat_lower'] = df_future['yhat'] - (1.96 * rmse)
-    df_future['yhat_upper'] = df_future['yhat'] + (1.96 * rmse)
-    
-    # We also need to attach historical data to this dataframe to match Prophet's 'forecast' object
-    # Prophet returns the Whole history + future.
-    df_history = data.copy()
-    df_history['yhat'] = df_history['y'] # For history, prediction is actual (simplification for viz)
-    df_history['yhat_lower'] = df_history['y']
-    df_history['yhat_upper'] = df_history['y']
-    
-    # Concatenate
-    df_final = pd.concat([df_history, df_future], ignore_index=True)
-    df_final['ds'] = pd.to_datetime(df_final['ds'])
-    
-    return df_final, rmse
-
 # --- MAIN APP LOGIC ---
 
 if run_button:
-    if algo_choice == "ARIMA (Coming Soon)":
-         st.warning("ARIMA is not yet implemented.")
-         st.stop()
+    if algo_choice != "Facebook Prophet":
+        st.warning(f"{algo_choice} is not yet implemented. Using Prophet logic as placeholder.")
 
     with st.spinner('Downloading Data and Preprocessing...'):
         # Unpack the 3 return values
@@ -327,82 +252,44 @@ if run_button:
         st.error(f"Error: {error}")
     else:
         # --- DISPLAY COMPANY INFO ---
-        # We populate the placeholder we created at the top
         with company_info_placeholder.container():
             st.markdown(f"## {meta_data['longName']}")
             with st.expander("Show Business Summary", expanded=False):
                 st.write(meta_data['longBusinessSummary'])
             st.divider()
 
+        # Run Competition
+        st.subheader("Model Optimization")
+        
         # Check if we have enough data for the requested horizon
         if len(df_data) < 180:
             st.warning("Data history is very short. Forecast quality may be low.")
             
-        forecast = None
-        best_combo = []
+        best_model, best_combo, best_rmse, results_df = run_prophet_competition(df_data, var_past_horizon_mo)
 
-        # --- BRANCH: FACEBOOK PROPHET ---
-        if algo_choice == "Facebook Prophet":
-            st.subheader("Model Optimization (Prophet)")
-            best_model, best_combo, best_rmse, results_df = run_prophet_competition(df_data, var_past_horizon_mo)
-
-            if best_model is None:
-                st.error("Could not find a valid model. Try increasing the history lookback period.")
-            else:
-                 # Success Message
-                st.success(f"Optimization Complete! Best RMSE: {best_rmse:.2f}")
-                st.write("**Best Regressors for this stock:**")
-                st.write(", ".join(best_combo) if best_combo else "None (Univariate)")
-
-                # FORECASTING FUTURE
-                future = best_model.make_future_dataframe(periods=var_future_fcst_mo*30) 
-                
-                # Forward fill future regressors 
-                for reg in best_combo:
-                    last_known_value = df_data[reg].iloc[-1]
-                    future[reg] = df_data[reg] # Fill historical
-                    future[reg] = future[reg].fillna(last_known_value) # Fill future
-
-                forecast = best_model.predict(future)
-
-        # --- BRANCH: LSTM ---
-        elif algo_choice == "LSTM (Deep Learning)":
-            st.subheader("Model Training (LSTM)")
-            status_text = st.empty()
-            status_text.text("Initializing TensorFlow & scaling data...")
-            progress_bar = st.progress(0)
-            
-            # Run LSTM
-            try:
-                progress_bar.progress(30)
-                status_text.text("Training LSTM Network (this may take a moment)...")
-                
-                forecast, train_rmse = run_lstm_forecast(df_data, var_future_fcst_mo)
-                
-                progress_bar.progress(100)
-                status_text.text("Training Complete.")
-                time.sleep(1)
-                status_text.empty()
-                progress_bar.empty()
-                
-                st.success(f"LSTM Training Complete! Training RMSE: {train_rmse:.2f}")
-                st.info("Note: Uncertainty intervals for LSTM are approximated using training error.")
-                best_combo = ["LSTM (Univariate)", "Gradient Clipping: True"]
-                
-            except Exception as e:
-                st.error(f"LSTM Training Failed: {e}")
-
-        # --- RESULTS SECTION (Unified for both models) ---
-        if forecast is not None:
+        if best_model is None:
+            st.error("Could not find a valid model. Try increasing the history lookback period.")
+        else:
+            # --- RESULTS SECTION ---
             col1, col2 = st.columns([1, 2])
             
             with col1:
-                # If it's prophet, we already showed the regressors. 
-                # If LSTM, we show model details.
-                if algo_choice == "LSTM (Deep Learning)":
-                    st.write("**Model Parameters:**")
-                    for feat in best_combo:
-                        st.code(feat)
+                st.success("Optimization Complete!")
+                
+                st.write("**Best Regressors for this stock:**")
+                for feature in best_combo:
+                    st.code(feature)
+
+            # --- FORECASTING FUTURE ---
+            future = best_model.make_future_dataframe(periods=var_future_fcst_mo*30) 
+            
+            # Forward fill future regressors 
+            for reg in best_combo:
+                last_known_value = df_data[reg].iloc[-1]
+                future[reg] = df_data[reg] # Fill historical
+                future[reg] = future[reg].fillna(last_known_value) # Fill future
+
+            forecast = best_model.predict(future)
 
             # --- INTERACTIVE PLOTLY CHART ---
             with col2:
@@ -410,7 +297,7 @@ if run_button:
                 
                 fig = go.Figure()
 
-                # Historical Data (Actuals) - We use df_data for the pure actuals
+                # Historical Data (Actuals)
                 fig.add_trace(go.Scatter(
                     x=df_data['ds'], 
                     y=df_data['y'],
@@ -420,7 +307,6 @@ if run_button:
                 ))
 
                 # Forecast Data
-                # Filter forecast to only show the future part + slightly overlapping 
                 future_forecast = forecast[forecast['ds'] > pd.Timestamp(df_data['ds'].max())]
                 
                 fig.add_trace(go.Scatter(
@@ -445,7 +331,7 @@ if run_button:
                     x=future_forecast['ds'],
                     y=future_forecast['yhat_lower'],
                     mode='lines',
-                    fill='tonexty', # Fill area between upper and lower
+                    fill='tonexty', 
                     fillcolor='rgba(255, 69, 0, 0.2)',
                     line=dict(width=0),
                     name='Uncertainty Interval'
