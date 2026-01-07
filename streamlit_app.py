@@ -399,7 +399,7 @@ if run_button:
                 st.success("LSTM Network Trained!")
                 st.write("**Model Architecture:**")
                 st.code("Layers: LSTM(50) -> LSTM(50) -> Dense(25) -> Dense(1)")
-                st.write(f"Lookback Window: {look_back} Days")
+                st.write("Lookback Window: 100 Days")
 
         # --- SHARED PLOTTING LOGIC ---
         if forecast_results is not None:
