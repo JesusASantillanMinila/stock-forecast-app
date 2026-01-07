@@ -81,9 +81,9 @@ def get_stock_data(ticker, months):
             return None, None, "No price data found for ticker."
 
         # --- NEW: CALCULATE MOVING AVERAGES ---
-        df_stock_price['Moving Average 50 Days'] = df_stock_price['Close'].rolling(window=63).mean()
-        df_stock_price['Moving Average 100 Days'] = df_stock_price['Close'].rolling(window=126).mean()
-        df_stock_price['Moving Average 200 Days'] = df_stock_price['Close'].rolling(window=252).mean()
+        df_stock_price['Moving Average 50 Days'] = df_stock_price['Close'].rolling(window=50).mean()
+        df_stock_price['Moving Average 100 Days'] = df_stock_price['Close'].rolling(window=100).mean()
+        df_stock_price['Moving Average 200 Days'] = df_stock_price['Close'].rolling(window=200).mean()
 
         # --- NEW: SLICE DATA BACK TO REQUESTED RANGE ---
         max_date = pd.to_datetime(df_stock_price['Date']).max()
@@ -158,7 +158,7 @@ def get_stock_data(ticker, months):
         if 'Reported EPS' in df_prophet.columns: df_prophet['Reported EPS'] = df_prophet['Reported EPS'].fillna(0)
         
         # Fill Forward/Back for continuous variables
-        cols_to_fill = ['Volatility Index Close', 'Volume', 'Moving Average 3 Months', 'Moving Average 6 Months', 'Moving Average 12 Months']
+        cols_to_fill = ['Volatility Index Close', 'Volume', 'Moving Average 50 Days', 'Moving Average 100 Days', 'Moving Average 200 Days']
         for col in cols_to_fill:
             if col in df_prophet.columns:
                 df_prophet[col] = df_prophet[col].ffill().bfill()
