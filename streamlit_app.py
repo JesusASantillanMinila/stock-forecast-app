@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 import datetime
 import time
 
+import pmdarima as pm
+
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
@@ -31,7 +33,7 @@ with st.sidebar:
     
     algo_choice = st.selectbox(
         "Forecasting Algorithm", 
-        ("Facebook Prophet", "LSTM", "ARIMA (Coming Soon)")
+        ("Facebook Prophet", "LSTM", "ARIMA")
     )
     
     run_button = st.button("Run Forecast", type="primary")
@@ -252,7 +254,7 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
-# --- NEW: LSTM TRAINING FUNCTION ---
+# --- LSTM TRAINING FUNCTION ---
 def run_lstm_model(df, forecast_months):
     """
     Runs a recursive LSTM Forecast.
@@ -336,12 +338,52 @@ def run_lstm_model(df, forecast_months):
     
     return forecast_df
 
+# --- ARIMA TRAINING FUNCTION ---
+def run_arima_model(df, forecast_months):
+    """
+    Runs an Auto-ARIMA forecast using pmdarima.
+    """
+    st.info("Training Auto-ARIMA Model... (Optimizing p,d,q parameters)")
+    
+    # Prepare data (Auto-ARIMA handles stationarity check)
+    train_data = df['y'].values
+    
+    # Fit Auto-ARIMA
+    # seasonal=False is usually safer for daily stock data unless we aggregate weekly/monthly
+    # stepwise=True makes it faster
+    model = pm.auto_arima(
+        train_data, 
+        start_p=0, start_q=0,
+        max_p=5, max_q=5,
+        d=None,           # Let model determine 'd'
+        seasonal=False,   # No seasonality assumed for daily stock prices
+        stepwise=True,
+        suppress_warnings=True,
+        error_action='ignore',
+        trace=False
+    )
+    
+    # Forecast
+    n_periods = forecast_months * 30
+    fc, confint = model.predict(n_periods=n_periods, return_conf_int=True)
+    
+    # Create Future DataFrame matching Prophet structure
+    last_date = pd.to_datetime(df['ds'].max())
+    future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, n_periods + 1)]
+    
+    forecast_df = pd.DataFrame({
+        'ds': future_dates,
+        'yhat': fc,
+        'yhat_lower': confint[:, 0],
+        'yhat_upper': confint[:, 1]
+    })
+    
+    return forecast_df
+
 # --- MAIN APP LOGIC ---
 
 if run_button:
-    if algo_choice == "ARIMA (Coming Soon)":
-        st.warning(f"{algo_choice} is not yet implemented.")
-        st.stop()
+    # --- REMOVED: Old "Coming Soon" check for ARIMA ---
 
     with st.spinner('Downloading Data and Preprocessing...'):
         # Unpack the 3 return values
@@ -405,6 +447,18 @@ if run_button:
                     "regulate information flow, the model is able to distinguish between significant long-term "
                     "trends and short-term fluctuations, allowing it to effectively retain relevant historical "
                     "dependencies throughout the sequence."
+                )
+        
+        # --- NEW: ARIMA BRANCH ---
+        elif algo_choice == "ARIMA":
+            forecast_results = run_arima_model(df_data, var_future_fcst_mo)
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.success("ARIMA Model Fitted!")
+                st.write(
+                    "Auto-ARIMA (Auto-Regressive Integrated Moving Average) automatically "
+                    "discovers the optimal order of differencing (d), autoregression (p), "
+                    "and moving average (q) to project future trends based on statistical patterns."
                 )
 
         # --- SHARED PLOTTING LOGIC ---
