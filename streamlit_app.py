@@ -397,9 +397,15 @@ if run_button:
             col1, col2 = st.columns([1, 2])
             with col1:
                 st.success("LSTM Network Trained!")
-                st.write("**Model Architecture:**")
-                st.code("Layers: LSTM(50) -> LSTM(50) -> Dense(25) -> Dense(1)")
-                st.write("Lookback Window: 100 Days")
+                
+                # Formal, objective explanation
+                st.write(
+                    "Long Short-Term Memory (LSTM) is a recurrent neural network architecture specifically "
+                    "engineered for time-series forecasting. By employing specialized gating mechanisms to "
+                    "regulate information flow, the model is able to distinguish between significant long-term "
+                    "trends and short-term fluctuations, allowing it to effectively retain relevant historical "
+                    "dependencies throughout the sequence."
+                )
 
         # --- SHARED PLOTTING LOGIC ---
         if forecast_results is not None:
