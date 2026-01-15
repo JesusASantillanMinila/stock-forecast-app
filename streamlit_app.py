@@ -258,11 +258,13 @@ def run_lstm_model(df, forecast_months):
     """
     Runs a recursive Multivariate LSTM Forecast with Dynamic Feature Updates.
     """
-    st.info("Training Multivariate LSTM Neural Network... (this may take a moment)")
-    
+        
     # 1. Select Features
-    # We prioritize the features requested. 
-    feature_cols = ['y', 'Moving Average 50 Days', 'Moving Average 100 Days', 'Moving Average 200 Days']
+    feature_cols = ['y'
+                    , 'Moving Average 50 Days'
+                    # , 'Moving Average 100 Days'
+                    , 'Moving Average 200 Days'
+                   ]
     # NOTE: We dropped 'Volume' because forecasting volume is noisy and hurts the price model in this simple setup.
     
     valid_features = [col for col in feature_cols if col in df.columns]
@@ -434,7 +436,8 @@ if run_button:
 
         elif algo_choice == "LSTM":
             # Run LSTM
-            forecast_results = run_lstm_model(df_data, var_future_fcst_mo)
+            with st.spinner("Training Multivariate LSTM Neural Network"):
+                forecast_results = run_lstm_model(df_data, var_future_fcst_mo)
             col1, col2 = st.columns([1, 2])
             with col1:
                 st.success("LSTM Network Trained!")
