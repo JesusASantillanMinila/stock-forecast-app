@@ -9,9 +9,6 @@ import plotly.graph_objects as go
 import datetime
 import time
 
-# --- IMPORT FOR ARIMA ---
-import pmdarima as pm
-
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
@@ -34,7 +31,7 @@ with st.sidebar:
     
     algo_choice = st.selectbox(
         "Forecasting Algorithm", 
-        ("Facebook Prophet", "LSTM", "ARIMA")
+        ("Facebook Prophet", "LSTM", "ARIMA (Coming Soon)")
     )
     
     run_button = st.button("Run Forecast", type="primary")
@@ -46,11 +43,13 @@ def get_stock_data(ticker, months):
     Fetches Stock, VIX, Dividends, Earnings data AND Company Metadata.
     """
     try:
+        
         var_ticker_class = yf.Ticker(ticker)
         time.sleep(1)
         
         # 0. Fetch Company Metadata
         try:
+            
             t_info = var_ticker_class.info
             time.sleep(1)
             var_long_name = t_info.get("longName", ticker)
@@ -64,10 +63,11 @@ def get_stock_data(ticker, months):
         except Exception as e:
             metadata = {
                 "longName": ticker,
-                "longBusinessSummary": str(e)
+                "longBusinessSummary": e
             }
         
         # 1. Download Stock Price
+        # Fetch an extra 12 months to calculate the 12-month moving average correctly
         fetch_months = months + 12
         df_stock_price = yf.download(ticker, period=f'{fetch_months}mo', progress=False)
         
@@ -82,14 +82,16 @@ def get_stock_data(ticker, months):
         if df_stock_price.empty:
             return None, None, "No price data found for ticker."
 
-        # Calculate Moving Averages
+        # --- moving averages ---
         df_stock_price['Moving Average 50 Days'] = df_stock_price['Close'].rolling(window=50).mean()
         df_stock_price['Moving Average 100 Days'] = df_stock_price['Close'].rolling(window=100).mean()
         df_stock_price['Moving Average 200 Days'] = df_stock_price['Close'].rolling(window=200).mean()
 
-        # Slice data
+        # --- slice data ---
         max_date = pd.to_datetime(df_stock_price['Date']).max()
         cutoff_date = (max_date - pd.DateOffset(months=months)).date()
+        
+        # Filter for the requested period
         df_stock_price = df_stock_price[df_stock_price['Date'] > cutoff_date].reset_index(drop=True)
 
         # 2. Get Dividends
@@ -107,7 +109,8 @@ def get_stock_data(ticker, months):
         df_fcst_input = pd.merge(
             df_stock_price,
             df_div_splits[['Date', 'Dividends']] if 'Dividends' in df_div_splits.columns else df_div_splits,
-            how='left', on="Date"
+            how='left',
+            on="Date"
         )
 
         # 3. Get Earnings (EPS)
@@ -131,6 +134,7 @@ def get_stock_data(ticker, months):
             df_fcst_input['Reported EPS'] = np.nan
 
         # 4. Get VIX Data
+        # We fetch the extended period for VIX too, then merge will handle the filtering automatically
         var_ticker_class_vix = yf.Ticker("^VIX")
         df_vix = var_ticker_class_vix.history(period=f'{fetch_months}mo')
         df_vix.index.name = None
@@ -141,16 +145,21 @@ def get_stock_data(ticker, months):
 
         # Merge VIX
         df_fcst_input = pd.merge(
-            df_fcst_input, df_vix, how='left',
-            left_on="Date", right_on="Volatility Index Date"
+            df_fcst_input,
+            df_vix,
+            how='left',
+            left_on="Date",
+            right_on="Volatility Index Date"
         )
         
-        # Prophet Prep
+        # Final Prep for Prophet
         df_prophet = df_fcst_input.rename(columns={'Date': 'ds', 'Close': 'y'})
         
+        # Fill NaNs for regressors
         if 'Dividends' in df_prophet.columns: df_prophet['Dividends'] = df_prophet['Dividends'].fillna(0)
         if 'Reported EPS' in df_prophet.columns: df_prophet['Reported EPS'] = df_prophet['Reported EPS'].fillna(0)
         
+        # Fill Forward/Back for continuous variables
         cols_to_fill = ['Volatility Index Close', 'Volume', 'Moving Average 50 Days', 'Moving Average 100 Days', 'Moving Average 200 Days']
         for col in cols_to_fill:
             if col in df_prophet.columns:
@@ -163,9 +172,21 @@ def get_stock_data(ticker, months):
 
 # --- PROPHET TRAINING FUNCTION ---
 def run_prophet_competition(df, history_months):
+    """
+    Runs the regressor competition loop.
+    """
+    
     potential_regressors = [
-        'Volume', 'Reported EPS', 'Dividends', 'Moving Average 50 Days', 'Moving Average 200 Days'
+        'Volume'
+        , 'Reported EPS'
+        , 'Dividends'
+        # , 'Volatility Index Close'
+        , 'Moving Average 50 Days'
+        # , 'Moving Average 100 Days'
+        , 'Moving Average 200 Days'
     ]
+    
+    # Filter only columns that actually exist in the dataframe
     available_regressors = [r for r in potential_regressors if r in df.columns]
     
     best_rmse = float('inf')
@@ -175,13 +196,17 @@ def run_prophet_competition(df, history_months):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    total_combos = sum(1 for r in range(1, len(available_regressors) + 1) for _ in combinations(available_regressors, r))
+    # Calculate total iterations for progress bar
+    total_combos = sum(1 for r in range(1, len(available_regressors) + 1) 
+                       for _ in combinations(available_regressors, r))
     current_iter = 0
+
     results_log = []
 
     for r in range(1, len(available_regressors) + 1):
         for combo in combinations(available_regressors, r):
             regressor_list = list(combo)
+            
             status_text.text(f"Testing features: {', '.join(regressor_list)}...")
             
             m = Prophet(daily_seasonality=True, yearly_seasonality=True)
@@ -190,12 +215,17 @@ def run_prophet_competition(df, history_months):
             
             m.fit(df)
             
+            # Dynamic Cross Validation Params based on history length
             days_history = history_months * 30
             initial_days = f"{int(days_history * 0.5)} days"
             
             try:
                 df_cv = cross_validation(
-                    m, initial=initial_days, period='90 days', horizon='30 days', parallel="processes"
+                    m, 
+                    initial=initial_days, 
+                    period='90 days', 
+                    horizon='30 days', 
+                    parallel="processes"
                 )
                 df_p = performance_metrics(df_cv)
                 current_rmse = df_p['rmse'].mean()
@@ -221,55 +251,79 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
-# --- LSTM TRAINING FUNCTION ---
+# --- NEW: LSTM TRAINING FUNCTION ---
 def run_lstm_model(df, forecast_months):
+    """
+    Runs a recursive LSTM Forecast.
+    """
     st.info("Training LSTM Neural Network... (this may take a moment)")
     
     data = df['y'].values.reshape(-1, 1)
     
+    # Scale Data
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(data)
     
-    look_back = 100 
+    # Create Sequences
+    look_back = 100 # Look back 60 days
     X, y = [], []
     for i in range(look_back, len(scaled_data)):
         X.append(scaled_data[i-look_back:i, 0])
         y.append(scaled_data[i, 0])
     X, y = np.array(X), np.array(y)
     
+    # Reshape for LSTM [samples, time steps, features]
     X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     
+    # Build Model
     model = Sequential()
+    # Return sequences=True for the first layer to stack LSTMs if needed, 
+    # but here we use a dense structure to capture patterns
     model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)))
     model.add(LSTM(units=50, return_sequences=False))
     model.add(Dense(units=25))
     model.add(Dense(units=1))
     
     model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X, y, batch_size=32, epochs=25, verbose=0)
+    model.fit(X, y, batch_size=32, epochs=25, verbose=0) # 25 epochs is usually enough for a demo
     
+    # Estimate Uncertainty (Residuals on Train Data)
     train_predict = model.predict(X)
     train_residuals = y - train_predict.flatten()
     std_dev = np.std(train_residuals)
     
+    # --- FORECASTING LOOP ---
     future_days = forecast_months * 30
-    curr_sequence = scaled_data[-look_back:].reshape(1, look_back, 1)
+    
+    # Start with the last known sequence
+    curr_sequence = scaled_data[-look_back:]
+    curr_sequence = curr_sequence.reshape(1, look_back, 1)
+    
     future_preds = []
     
     for _ in range(future_days):
+        # Predict next step
         next_step = model.predict(curr_sequence, verbose=0)
         future_preds.append(next_step[0, 0])
+        
+        # Update sequence: remove first, append new prediction
         next_step_reshaped = next_step.reshape(1, 1, 1)
         curr_sequence = np.append(curr_sequence[:, 1:, :], next_step_reshaped, axis=1)
         
+    # Inverse Transform
     future_preds = np.array(future_preds).reshape(-1, 1)
     future_preds_actual = scaler.inverse_transform(future_preds)
     
+    # Create Future DataFrame matching Prophet structure
     last_date = pd.to_datetime(df['ds'].max())
     future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
     
+    # Construct Forecast DataFrame
+    # Note: We scale std_dev back to original price scale for uncertainty
     scale_factor = scaler.data_range_[0]
-    uncertainty_magnitude = std_dev * scale_factor * 1.96 
+    uncertainty_magnitude = std_dev * scale_factor * 1.96 # ~95% confidence interval
+    
+    # To make uncertainty grow slightly with time (more realistic), we add a time factor
     time_factor = np.linspace(1, 1.5, len(future_preds_actual)).reshape(-1, 1)
     
     forecast_df = pd.DataFrame({
@@ -281,69 +335,37 @@ def run_lstm_model(df, forecast_months):
     
     return forecast_df
 
-# --- UPDATED ARIMA TRAINING FUNCTION ---
-def run_arima_model(df, forecast_months):
-    """
-    Runs an Auto-ARIMA forecast using pmdarima.
-    Updated to attempt Seasonality (m=5) to capture weekly patterns.
-    """
-    st.info("Training Auto-ARIMA Model... (Optimizing p,d,q parameters)")
-    
-    train_data = df['y'].values
-    
-    # We set seasonal=True and m=5 (for 5 trading days in a week).
-    # This gives the model permission to find weekly patterns, rather than just a straight trend line.
-    model = pm.auto_arima(
-        train_data, 
-        start_p=1, start_q=1,
-        max_p=5, max_q=5,
-        m=5,              # Weekly seasonality
-        seasonal=True,    # ENABLE SEASONALITY
-        d=None,           # Let model determine 'd'
-        test='adf',       # Use ADF test for stationarity
-        stepwise=True,
-        suppress_warnings=True,
-        error_action='ignore',
-        trace=False
-    )
-    
-    n_periods = forecast_months * 30
-    fc, confint = model.predict(n_periods=n_periods, return_conf_int=True)
-    
-    last_date = pd.to_datetime(df['ds'].max())
-    future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, n_periods + 1)]
-    
-    forecast_df = pd.DataFrame({
-        'ds': future_dates,
-        'yhat': fc,
-        'yhat_lower': confint[:, 0],
-        'yhat_upper': confint[:, 1]
-    })
-    
-    return forecast_df
-
 # --- MAIN APP LOGIC ---
 
 if run_button:
+    if algo_choice == "ARIMA (Coming Soon)":
+        st.warning(f"{algo_choice} is not yet implemented.")
+        st.stop()
+
     with st.spinner('Downloading Data and Preprocessing...'):
+        # Unpack the 3 return values
         df_data, meta_data, error = get_stock_data(var_ticker_input, var_past_horizon_mo)
 
     if error:
         st.error(f"Error: {error}")
     else:
+        # --- DISPLAY COMPANY INFO ---
         with company_info_placeholder.container():
             st.markdown(f"## {meta_data['longName']}")
             with st.expander("Show Business Summary", expanded=False):
                 st.write(meta_data['longBusinessSummary'])
             st.divider()
 
+        # Run Competition / Model
         st.subheader("Model Optimization")
         
+        # Check if we have enough data for the requested horizon
         if len(df_data) < 180:
             st.warning("Data history is very short. Forecast quality may be low.")
             
         forecast_results = None
         
+        # --- BRANCHING LOGIC ---
         if algo_choice == "Facebook Prophet":
             best_model, best_combo, best_rmse, results_df = run_prophet_competition(df_data, var_past_horizon_mo)
             
@@ -357,43 +379,41 @@ if run_button:
                     for feature in best_combo:
                         st.code(feature)
                         
+                # Make Prophet Forecast
                 future = best_model.make_future_dataframe(periods=var_future_fcst_mo*30) 
                 for reg in best_combo:
                     last_known_value = df_data[reg].iloc[-1]
-                    future[reg] = df_data[reg] 
-                    future[reg] = future[reg].fillna(last_known_value) 
+                    future[reg] = df_data[reg] # Fill historical
+                    future[reg] = future[reg].fillna(last_known_value) # Fill future
 
                 full_forecast = best_model.predict(future)
+                # Filter only for future part for plotting consistency with LSTM logic
                 forecast_results = full_forecast[full_forecast['ds'] > pd.Timestamp(df_data['ds'].max())]
 
         elif algo_choice == "LSTM":
+            # Run LSTM
             forecast_results = run_lstm_model(df_data, var_future_fcst_mo)
             col1, col2 = st.columns([1, 2])
             with col1:
                 st.success("LSTM Network Trained!")
+                
+                # Formal, objective explanation
                 st.write(
                     "Long Short-Term Memory (LSTM) is a recurrent neural network architecture specifically "
-                    "engineered for time-series forecasting."
-                )
-        
-        elif algo_choice == "ARIMA":
-            forecast_results = run_arima_model(df_data, var_future_fcst_mo)
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                st.success("ARIMA Model Fitted!")
-                st.write(
-                    "**Note on ARIMA Results:** ARIMA is a statistical model that prioritizes simplicity. "
-                    "For many stocks, the statistically 'best' prediction is often a linear trend or a "
-                    "mean-reverting line, as stocks often follow a 'Random Walk'. "
-                    "We have enabled weekly seasonality to attempt to capture short-term patterns."
+                    "engineered for time-series forecasting. By employing specialized gating mechanisms to "
+                    "regulate information flow, the model is able to distinguish between significant long-term "
+                    "trends and short-term fluctuations, allowing it to effectively retain relevant historical "
+                    "dependencies throughout the sequence."
                 )
 
+        # --- SHARED PLOTTING LOGIC ---
         if forecast_results is not None:
             with col2:
                 st.subheader(f"Forecast: {var_ticker_input}")
                 
                 fig = go.Figure()
 
+                # Historical Data (Actuals)
                 fig.add_trace(go.Scatter(
                     x=df_data['ds'], 
                     y=df_data['y'],
@@ -402,6 +422,7 @@ if run_button:
                     line=dict(color='deepskyblue')
                 ))
 
+                # Forecast Data
                 fig.add_trace(go.Scatter(
                     x=forecast_results['ds'],
                     y=forecast_results['yhat'],
@@ -410,6 +431,7 @@ if run_button:
                     line=dict(color='orangered')
                 ))
 
+                # Uncertainty Intervals (Upper/Lower bounds)
                 fig.add_trace(go.Scatter(
                     x=forecast_results['ds'],
                     y=forecast_results['yhat_upper'],
