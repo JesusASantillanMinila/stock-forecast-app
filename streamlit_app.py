@@ -59,7 +59,7 @@ def get_stock_data(ticker, months):
             time.sleep(1)
             var_long_name = t_info.get("longName", ticker)
             time.sleep(1)
-            var_business_summary = t_info.get("longBusinessSummary", "No summary available.")
+            var_business_summary = t_info.get("longBusinessSummary", "No summary available. Too Many API  Requests. Rate limited. Try after a while.")
             
             metadata = {
                 "longName": var_long_name,
@@ -68,7 +68,7 @@ def get_stock_data(ticker, months):
         except Exception as e:
             metadata = {
                 "longName": ticker,
-                "longBusinessSummary": e
+                "longBusinessSummary": "No summary available. Too Many API  Requests. Rate limited. Try after a while."
             }
         
         # 1. Download Stock Price
