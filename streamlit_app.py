@@ -2,13 +2,17 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from prophet import Prophet
-from prophet.diagnostics import cross_validation, performance_metrics
-from itertools import combinations
 import plotly.graph_objects as go
 import datetime
 import time
 
+# --- PROPHET ---
+from prophet import Prophet
+from prophet.diagnostics import cross_validation, performance_metrics
+from itertools import combinations
+
+# --- LSTM ---
+from tensorflow.keras.optimizers import Adam
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
@@ -252,134 +256,112 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
-# --- LSTM MULTI  TRAINING FUNCTION ---
-# --- CORRECTED LSTM TRAINING FUNCTION ---
+# --- LSTM TRAINING FUNCTION ---
 def run_lstm_model(df, forecast_months):
     """
-    Runs a recursive Multivariate LSTM Forecast with Dynamic Feature Updates.
+    Runs a Univariate LSTM on Log Returns to ensure stationarity.
+    Fixes 'straight line' forecasts by predicting volatility instead of price levels.
     """
-        
-    # 1. Select Features
-    feature_cols = ['y'
-                    , 'Moving Average 50 Days'
-                    # , 'Moving Average 100 Days'
-                    , 'Moving Average 200 Days'
-                   ]
-    # NOTE: We dropped 'Volume' because forecasting volume is noisy and hurts the price model in this simple setup.
     
-    valid_features = [col for col in feature_cols if col in df.columns]
+    # 1. Preprocessing: Convert Price to Log Returns
+    # This makes the data stationary (oscillating around 0) rather than trending
+    df['log_ret'] = np.log(df['y'] / df['y'].shift(1))
     
-    # Ensure 'y' (Price) is the first column for easier inverse scaling later
-    if 'y' not in valid_features:
-        valid_features.insert(0, 'y')
-    else:
-        valid_features.remove('y')
-        valid_features.insert(0, 'y')
-        
-    # We need the unscaled history to calculate rolling averages dynamically
-    price_history = list(df['y'].values)
+    # Drop the NaN created by the shift
+    df_model = df.dropna().copy()
     
-    data = df[valid_features].values
+    # We use ONLY Log Returns. 
+    # (Removing Moving Averages prevents the 'smoothing' effect that causes flat lines)
+    data = df_model['log_ret'].values.reshape(-1, 1)
     
     # 2. Scale Data
+    # MinMax on returns usually lands between 0.4 and 0.6, keeping gradients stable
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(data)
     
     # 3. Create Sequences
-    look_back = 60  
+    look_back = 60
     X, y = [], []
     
     for i in range(look_back, len(scaled_data)):
-        X.append(scaled_data[i-look_back:i, :])
+        X.append(scaled_data[i-look_back:i, 0])
         y.append(scaled_data[i, 0])
         
     X, y = np.array(X), np.array(y)
-    n_features = X.shape[2]
     
-    # 4. Build Model (Added Dropout to reduce overfitting to the trend line)
+    # Reshape for LSTM [samples, time steps, features]
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     
+    # 4. Build Model with Gradient Clipping
     model = Sequential()
-    model.add(LSTM(units=50, return_sequences=True, input_shape=(look_back, n_features)))
-    model.add(Dropout(0.2)) 
+    # return_sequences=True feeds the hidden state to the next layer
+    model.add(LSTM(units=50, return_sequences=True, input_shape=(look_back, 1)))
+    model.add(Dropout(0.2))
     model.add(LSTM(units=50, return_sequences=False))
     model.add(Dropout(0.2))
     model.add(Dense(units=25))
     model.add(Dense(units=1))
     
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X, y, batch_size=32, epochs=50, verbose=0) # Increased epochs slightly
+    # OPTIMIZER FIX: clipvalue=1.0 prevents the "Exploding Gradient" numerical error
+    optimizer = Adam(learning_rate=0.001, clipvalue=1.0)
+    model.compile(optimizer=optimizer, loss='mean_squared_error')
     
-    # 5. Estimate Uncertainty
-    train_predict = model.predict(X)
-    train_residuals = y - train_predict.flatten()
-    std_dev = np.std(train_residuals)
+    # Train
+    model.fit(X, y, batch_size=32, epochs=25, verbose=0)
     
-    # 6. Forecasting Loop
+    # 5. Forecasting Loop
     future_days = forecast_months * 30
     
-    curr_sequence = scaled_data[-look_back:] 
-    curr_sequence = curr_sequence.reshape(1, look_back, n_features)
+    # Start sequence with the last 'look_back' days of known returns
+    curr_sequence = scaled_data[-look_back:]
+    curr_sequence = curr_sequence.reshape(1, look_back, 1)
     
-    future_preds_scaled = []
+    future_log_rets = []
+    
+    # We need the last actual price to reconstruct the chain later
+    last_actual_price = df['y'].iloc[-1]
     
     for _ in range(future_days):
-        # Predict next Price step
-        next_pred_scaled = model.predict(curr_sequence, verbose=0)[0, 0]
-        future_preds_scaled.append(next_pred_scaled)
+        # Predict next Step's Return
+        next_pred_scaled = model.predict(curr_sequence, verbose=0)
         
-        # --- DYNAMIC UPDATE LOGIC ---
+        # Store prediction
+        future_log_rets.append(next_pred_scaled[0, 0])
         
-        # 1. Inverse scale the predicted price to get the "Real" price
-        # (Price is at index 0)
-        pred_price_unscaled = next_pred_scaled * (scaler.data_range_[0]) + scaler.data_min_[0]
+        # Update Sequence: Remove oldest return, add new predicted return
+        # This recursive structure allows the model to generate its own volatility
+        curr_sequence = np.append(curr_sequence[:, 1:, :], [next_pred_scaled], axis=1)
         
-        # 2. Append to our running history list
-        price_history.append(pred_price_unscaled)
-        
-        # 3. Recalculate Moving Averages based on the new history
-        # We need to handle cases where we might not have enough data (though usually we do by this point)
-        new_ma50 = pd.Series(price_history).rolling(window=50).mean().iloc[-1]
-        new_ma100 = pd.Series(price_history).rolling(window=100).mean().iloc[-1]
-        new_ma200 = pd.Series(price_history).rolling(window=200).mean().iloc[-1]
-        
-        # 4. Construct the new row of features [Price, MA50, MA100, MA200]
-        # We must match the order of 'valid_features'
-        new_row_values = [pred_price_unscaled]
-        
-        if 'Moving Average 50 Days' in valid_features: new_row_values.append(new_ma50)
-        if 'Moving Average 100 Days' in valid_features: new_row_values.append(new_ma100)
-        if 'Moving Average 200 Days' in valid_features: new_row_values.append(new_ma200)
-        
-        # 5. Scale this new row using the original scaler
-        # Reshape to (1, -1) because scaler expects 2D array
-        new_row_scaled = scaler.transform(np.array([new_row_values]))
-        
-        # 6. Update Sequence
-        # Remove oldest time step, append new step
-        curr_sequence = np.append(curr_sequence[:, 1:, :], [new_row_scaled], axis=1)
-        
-    # 7. Inverse Transform Final Predictions
-    price_min = scaler.data_min_[0]
-    price_range = scaler.data_range_[0]
+    # 6. Reconstruct Price Path
+    # Inverse scale the predictions to get "Real" Log Returns
+    future_log_rets = np.array(future_log_rets).reshape(-1, 1)
+    future_log_rets_unscaled = scaler.inverse_transform(future_log_rets)
     
-    future_preds_actual = np.array(future_preds_scaled) * price_range + price_min
+    # Convert Log Returns back to Price: Price_t = Price_{t-1} * e^(return)
+    # Cumulative sum of log returns = Total Log Growth
+    future_cumulative_growth = np.exp(np.cumsum(future_log_rets_unscaled))
     
-    # 8. Create Future DataFrame
+    # Apply growth to the last known price
+    future_prices = last_actual_price * future_cumulative_growth
+    
+    # 7. Create Future DataFrame
     last_date = pd.to_datetime(df['ds'].max())
     future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
     
-    uncertainty_magnitude = std_dev * price_range * 1.96 
-    time_factor = np.linspace(1, 1.5, len(future_preds_actual))
+    # Dynamic Uncertainty Intervals
+    # We calculate volatility from the model's own history
+    hist_volatility = df_model['log_ret'].std()
+    # Cone expands over time (sqrt of time rule for random walks)
+    uncertainty_cone = np.array([hist_volatility * last_actual_price * np.sqrt(t) for t in range(1, future_days + 1)])
     
     forecast_df = pd.DataFrame({
         'ds': future_dates,
-        'yhat': future_preds_actual.flatten(),
-        'yhat_upper': (future_preds_actual + (uncertainty_magnitude * time_factor)).flatten(),
-        'yhat_lower': (future_preds_actual - (uncertainty_magnitude * time_factor)).flatten()
+        'yhat': future_prices.flatten(),
+        'yhat_upper': future_prices.flatten() + (uncertainty_cone * 1.96), # 95% Confidence rough proxy
+        'yhat_lower': future_prices.flatten() - (uncertainty_cone * 1.96)
     })
     
-    return forecast_df
-# --- MAIN APP LOGIC ---
+    return forecast_df# --- MAIN APP LOGIC ---
 
 if run_button:
     if algo_choice == "ARIMA (Coming Soon)":
