@@ -251,80 +251,108 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
-# --- NEW: LSTM TRAINING FUNCTION ---
+# --- LSTM MULTI  TRAINING FUNCTION ---
 def run_lstm_model(df, forecast_months):
     """
-    Runs a recursive LSTM Forecast.
+    Runs a recursive Multivariate LSTM Forecast.
     """
-    st.info("Training LSTM Neural Network... (this may take a moment)")
+    st.info("Training Multivariate LSTM Neural Network... (this may take a moment)")
     
-    data = df['y'].values.reshape(-1, 1)
+    # 1. Select Features
+    # We prioritize the features requested. We check if they exist to prevent crashing if data is short.
+    feature_cols = ['y', 'Volume', 'Moving Average 50 Days', 'Moving Average 100 Days', 'Moving Average 200 Days']
+    valid_features = [col for col in feature_cols if col in df.columns]
     
-    # Scale Data
+    # Ensure 'y' (Price) is the first column for easier inverse scaling later
+    if 'y' not in valid_features:
+        valid_features.insert(0, 'y')
+    else:
+        # Move 'y' to front
+        valid_features.remove('y')
+        valid_features.insert(0, 'y')
+        
+    data = df[valid_features].values
+    
+    # 2. Scale Data
+    # We use one scaler for all, but we need to track parameters to inverse transform ONLY the price later
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(data)
     
-    # Create Sequences
-    look_back = 100 # Look back 60 days
+    # 3. Create Sequences
+    look_back = 60  # Look back 60 days
     X, y = [], []
+    
     for i in range(look_back, len(scaled_data)):
-        X.append(scaled_data[i-look_back:i, 0])
+        # Input: All features for the window
+        X.append(scaled_data[i-look_back:i, :])
+        # Target: Only the Price (column 0) for the next step
         y.append(scaled_data[i, 0])
+        
     X, y = np.array(X), np.array(y)
     
     # Reshape for LSTM [samples, time steps, features]
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+    n_features = X.shape[2]
     
-    # Build Model
+    # 4. Build Model
     model = Sequential()
-    # Return sequences=True for the first layer to stack LSTMs if needed, 
-    # but here we use a dense structure to capture patterns
-    model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)))
+    model.add(LSTM(units=50, return_sequences=True, input_shape=(look_back, n_features)))
     model.add(LSTM(units=50, return_sequences=False))
     model.add(Dense(units=25))
-    model.add(Dense(units=1))
+    model.add(Dense(units=1)) # Prediction is just the Price
     
     model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X, y, batch_size=32, epochs=25, verbose=0) # 25 epochs is usually enough for a demo
+    model.fit(X, y, batch_size=32, epochs=25, verbose=0)
     
-    # Estimate Uncertainty (Residuals on Train Data)
+    # 5. Estimate Uncertainty (Residuals on Train Data)
     train_predict = model.predict(X)
     train_residuals = y - train_predict.flatten()
     std_dev = np.std(train_residuals)
     
-    # --- FORECASTING LOOP ---
+    # 6. Forecasting Loop
     future_days = forecast_months * 30
     
     # Start with the last known sequence
-    curr_sequence = scaled_data[-look_back:]
-    curr_sequence = curr_sequence.reshape(1, look_back, 1)
+    curr_sequence = scaled_data[-look_back:] # Shape: (look_back, n_features)
+    curr_sequence = curr_sequence.reshape(1, look_back, n_features)
     
-    future_preds = []
+    future_preds_scaled = []
     
     for _ in range(future_days):
-        # Predict next step
-        next_step = model.predict(curr_sequence, verbose=0)
-        future_preds.append(next_step[0, 0])
+        # Predict next Price step
+        next_pred_scaled = model.predict(curr_sequence, verbose=0)[0, 0]
+        future_preds_scaled.append(next_pred_scaled)
         
-        # Update sequence: remove first, append new prediction
-        next_step_reshaped = next_step.reshape(1, 1, 1)
+        # Prepare the next input vector
+        # We need to construct a vector of size (1, n_features)
+        # [Predicted Price, Volume(t), MA50(t), ...]
+        # Note: In a recursive loop, we don't have future Volume/MAs. 
+        # Strategy: Use the predicted price, and carry forward the last known values for Volume/MAs (Naive approach)
+        
+        last_step_features = curr_sequence[0, -1, :] # Get last step vector
+        next_step_vector = last_step_features.copy() 
+        next_step_vector[0] = next_pred_scaled # Update Price
+        
+        # Reshape to (1, 1, n_features)
+        next_step_reshaped = next_step_vector.reshape(1, 1, n_features)
+        
+        # Append new step, remove oldest step
         curr_sequence = np.append(curr_sequence[:, 1:, :], next_step_reshaped, axis=1)
         
-    # Inverse Transform
-    future_preds = np.array(future_preds).reshape(-1, 1)
-    future_preds_actual = scaler.inverse_transform(future_preds)
+    # 7. Inverse Transform
+    # We manually inverse transform using the scaler parameters for the Price column (index 0)
+    # Price = Scaled * (Max - Min) + Min
+    price_min = scaler.data_min_[0]
+    price_range = scaler.data_range_[0]
     
-    # Create Future DataFrame matching Prophet structure
+    future_preds_actual = np.array(future_preds_scaled) * price_range + price_min
+    
+    # 8. Create Future DataFrame
     last_date = pd.to_datetime(df['ds'].max())
     future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
     
-    # Construct Forecast DataFrame
-    # Note: We scale std_dev back to original price scale for uncertainty
-    scale_factor = scaler.data_range_[0]
-    uncertainty_magnitude = std_dev * scale_factor * 1.96 # ~95% confidence interval
-    
-    # To make uncertainty grow slightly with time (more realistic), we add a time factor
-    time_factor = np.linspace(1, 1.5, len(future_preds_actual)).reshape(-1, 1)
+    # Scale uncertainty back to original units
+    uncertainty_magnitude = std_dev * price_range * 1.96 
+    time_factor = np.linspace(1, 1.5, len(future_preds_actual))
     
     forecast_df = pd.DataFrame({
         'ds': future_dates,
@@ -334,7 +362,6 @@ def run_lstm_model(df, forecast_months):
     })
     
     return forecast_df
-
 # --- MAIN APP LOGIC ---
 
 if run_button:
