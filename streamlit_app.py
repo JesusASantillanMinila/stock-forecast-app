@@ -12,6 +12,7 @@ import time
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import Dropout
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Stock Forecast Pro", layout="wide")
@@ -252,58 +253,61 @@ def run_prophet_competition(df, history_months):
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
 # --- LSTM MULTI  TRAINING FUNCTION ---
+# --- CORRECTED LSTM TRAINING FUNCTION ---
 def run_lstm_model(df, forecast_months):
     """
-    Runs a recursive Multivariate LSTM Forecast.
+    Runs a recursive Multivariate LSTM Forecast with Dynamic Feature Updates.
     """
     st.info("Training Multivariate LSTM Neural Network... (this may take a moment)")
     
     # 1. Select Features
-    # We prioritize the features requested. We check if they exist to prevent crashing if data is short.
-    feature_cols = ['y', 'Volume', 'Moving Average 50 Days', 'Moving Average 100 Days', 'Moving Average 200 Days']
+    # We prioritize the features requested. 
+    feature_cols = ['y', 'Moving Average 50 Days', 'Moving Average 100 Days', 'Moving Average 200 Days']
+    # NOTE: We dropped 'Volume' because forecasting volume is noisy and hurts the price model in this simple setup.
+    
     valid_features = [col for col in feature_cols if col in df.columns]
     
     # Ensure 'y' (Price) is the first column for easier inverse scaling later
     if 'y' not in valid_features:
         valid_features.insert(0, 'y')
     else:
-        # Move 'y' to front
         valid_features.remove('y')
         valid_features.insert(0, 'y')
         
+    # We need the unscaled history to calculate rolling averages dynamically
+    price_history = list(df['y'].values)
+    
     data = df[valid_features].values
     
     # 2. Scale Data
-    # We use one scaler for all, but we need to track parameters to inverse transform ONLY the price later
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(data)
     
     # 3. Create Sequences
-    look_back = 60  # Look back 60 days
+    look_back = 60  
     X, y = [], []
     
     for i in range(look_back, len(scaled_data)):
-        # Input: All features for the window
         X.append(scaled_data[i-look_back:i, :])
-        # Target: Only the Price (column 0) for the next step
         y.append(scaled_data[i, 0])
         
     X, y = np.array(X), np.array(y)
-    
-    # Reshape for LSTM [samples, time steps, features]
     n_features = X.shape[2]
     
-    # 4. Build Model
+    # 4. Build Model (Added Dropout to reduce overfitting to the trend line)
+    
     model = Sequential()
     model.add(LSTM(units=50, return_sequences=True, input_shape=(look_back, n_features)))
+    model.add(Dropout(0.2)) 
     model.add(LSTM(units=50, return_sequences=False))
+    model.add(Dropout(0.2))
     model.add(Dense(units=25))
-    model.add(Dense(units=1)) # Prediction is just the Price
+    model.add(Dense(units=1))
     
     model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X, y, batch_size=32, epochs=25, verbose=0)
+    model.fit(X, y, batch_size=32, epochs=50, verbose=0) # Increased epochs slightly
     
-    # 5. Estimate Uncertainty (Residuals on Train Data)
+    # 5. Estimate Uncertainty
     train_predict = model.predict(X)
     train_residuals = y - train_predict.flatten()
     std_dev = np.std(train_residuals)
@@ -311,8 +315,7 @@ def run_lstm_model(df, forecast_months):
     # 6. Forecasting Loop
     future_days = forecast_months * 30
     
-    # Start with the last known sequence
-    curr_sequence = scaled_data[-look_back:] # Shape: (look_back, n_features)
+    curr_sequence = scaled_data[-look_back:] 
     curr_sequence = curr_sequence.reshape(1, look_back, n_features)
     
     future_preds_scaled = []
@@ -322,25 +325,38 @@ def run_lstm_model(df, forecast_months):
         next_pred_scaled = model.predict(curr_sequence, verbose=0)[0, 0]
         future_preds_scaled.append(next_pred_scaled)
         
-        # Prepare the next input vector
-        # We need to construct a vector of size (1, n_features)
-        # [Predicted Price, Volume(t), MA50(t), ...]
-        # Note: In a recursive loop, we don't have future Volume/MAs. 
-        # Strategy: Use the predicted price, and carry forward the last known values for Volume/MAs (Naive approach)
+        # --- DYNAMIC UPDATE LOGIC ---
         
-        last_step_features = curr_sequence[0, -1, :] # Get last step vector
-        next_step_vector = last_step_features.copy() 
-        next_step_vector[0] = next_pred_scaled # Update Price
+        # 1. Inverse scale the predicted price to get the "Real" price
+        # (Price is at index 0)
+        pred_price_unscaled = next_pred_scaled * (scaler.data_range_[0]) + scaler.data_min_[0]
         
-        # Reshape to (1, 1, n_features)
-        next_step_reshaped = next_step_vector.reshape(1, 1, n_features)
+        # 2. Append to our running history list
+        price_history.append(pred_price_unscaled)
         
-        # Append new step, remove oldest step
-        curr_sequence = np.append(curr_sequence[:, 1:, :], next_step_reshaped, axis=1)
+        # 3. Recalculate Moving Averages based on the new history
+        # We need to handle cases where we might not have enough data (though usually we do by this point)
+        new_ma50 = pd.Series(price_history).rolling(window=50).mean().iloc[-1]
+        new_ma100 = pd.Series(price_history).rolling(window=100).mean().iloc[-1]
+        new_ma200 = pd.Series(price_history).rolling(window=200).mean().iloc[-1]
         
-    # 7. Inverse Transform
-    # We manually inverse transform using the scaler parameters for the Price column (index 0)
-    # Price = Scaled * (Max - Min) + Min
+        # 4. Construct the new row of features [Price, MA50, MA100, MA200]
+        # We must match the order of 'valid_features'
+        new_row_values = [pred_price_unscaled]
+        
+        if 'Moving Average 50 Days' in valid_features: new_row_values.append(new_ma50)
+        if 'Moving Average 100 Days' in valid_features: new_row_values.append(new_ma100)
+        if 'Moving Average 200 Days' in valid_features: new_row_values.append(new_ma200)
+        
+        # 5. Scale this new row using the original scaler
+        # Reshape to (1, -1) because scaler expects 2D array
+        new_row_scaled = scaler.transform(np.array([new_row_values]))
+        
+        # 6. Update Sequence
+        # Remove oldest time step, append new step
+        curr_sequence = np.append(curr_sequence[:, 1:, :], [new_row_scaled], axis=1)
+        
+    # 7. Inverse Transform Final Predictions
     price_min = scaler.data_min_[0]
     price_range = scaler.data_range_[0]
     
@@ -350,7 +366,6 @@ def run_lstm_model(df, forecast_months):
     last_date = pd.to_datetime(df['ds'].max())
     future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
     
-    # Scale uncertainty back to original units
     uncertainty_magnitude = std_dev * price_range * 1.96 
     time_factor = np.linspace(1, 1.5, len(future_preds_actual))
     
