@@ -256,38 +256,67 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
-# --- MOVING AVERAGE MODEL FUNCTION ---
+# --- RECURSIVE MOVING AVERAGE MODEL ---
 def run_moving_average_model(df, forecast_months):
     """
-    Forecasting based on simple projection of 50-day and 200-day Moving Averages.
+    Forecasting by recursively updating the 50-day and 200-day averages
+    into the future.
     """
     future_days = forecast_months * 30
     last_date = pd.to_datetime(df['ds'].max())
     future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
     
-    # Get latest MA values (Naive Forecast Strategy)
-    last_ma50 = df['Moving Average 50 Days'].iloc[-1]
-    last_ma200 = df['Moving Average 200 Days'].iloc[-1]
-    last_price = df['y'].iloc[-1]
+    # Isolate the price history as a list for recursive appending
+    history = df['y'].tolist()
     
-    # Calculate historical volatility for confidence intervals
-    daily_vol = df['y'].pct_change().std()
+    # We calculate the volatility of the LAST 50 days of actual data
+    # We will use this to draw the confidence intervals (expanding cone)
+    # This prevents the cone from "collapsing" due to the smoothness of averages
+    initial_volatility_std = np.std(history[-50:])
     
-    # Define Forecast (yhat) as the average of the two MAs
-    # This represents a "consensus" trend line between short and long term
-    forecast_values = (last_ma50 + last_ma200) / 2
+    predictions = []
+    upper_band = []
+    lower_band = []
     
-    # Create Uncertainty Cone
-    # 1. Base Spread: The distance between 50MA and 200MA (wider spread = more uncertainty)
-    # 2. Time decay: Volatility * sqrt(t)
-    base_spread = abs(last_ma50 - last_ma200) / 2
-    uncertainty = np.array([last_price * daily_vol * np.sqrt(t) for t in range(1, future_days + 1)])
-    
+    for i in range(future_days):
+        # 1. Calculate dynamic MAs based on the growing history list
+        # We assume history is long enough, otherwise we take what we have
+        
+        # 50-Day Recursive MA
+        if len(history) >= 50:
+            ma_50 = np.mean(history[-50:])
+        else:
+            ma_50 = np.mean(history)
+            
+        # 200-Day Recursive MA
+        if len(history) >= 200:
+            ma_200 = np.mean(history[-200:])
+        else:
+            # Fallback if history is short (e.g. IPOs)
+            ma_200 = np.mean(history)
+        
+        # 2. The Forecast is the average of these two trends
+        pred = (ma_50 + ma_200) / 2
+        
+        # 3. Calculate Uncertainty
+        # We use the Square Root of Time rule for volatility expansion
+        # t ranges from 1 to future_days
+        t = i + 1
+        uncertainty_factor = initial_volatility_std * np.sqrt(t)
+        
+        predictions.append(pred)
+        upper_band.append(pred + (1.96 * uncertainty_factor)) # 95% Confidence
+        lower_band.append(pred - (1.96 * uncertainty_factor))
+        
+        # 4. CRITICAL STEP: Append prediction to history
+        # This means the next loop's MA calculation includes this prediction
+        history.append(pred)
+        
     df_fcst = pd.DataFrame({
         'ds': future_dates,
-        'yhat': forecast_values,
-        'yhat_upper': forecast_values + base_spread + uncertainty,
-        'yhat_lower': forecast_values - base_spread - uncertainty
+        'yhat': predictions,
+        'yhat_upper': upper_band,
+        'yhat_lower': lower_band
     })
     
     return df_fcst
@@ -456,15 +485,15 @@ if run_button:
 
         elif algo_choice == "Moving Average":
             # Run Moving Average Model
-            with st.spinner("Calculating Moving Averages..."):
+            with st.spinner("Calculating Recursive Moving Averages..."):
                 forecast_results = run_moving_average_model(df_data, var_future_fcst_mo)
                 
             col1, col2 = st.columns([1, 2])
             with col1:
                 st.success("MA Projection Complete!")
                 st.write("**Features Used:**")
-                st.code("50-Day Moving Average")
-                st.code("200-Day Moving Average")
+                st.code("Forward-Looking 50-Day Mean")
+                st.code("Forward-Looking 200-Day Mean")
 
         elif algo_choice == "LSTM":
             # Run LSTM
