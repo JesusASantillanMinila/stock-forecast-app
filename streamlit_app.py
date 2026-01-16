@@ -36,7 +36,7 @@ with st.sidebar:
     
     algo_choice = st.selectbox(
         "Forecasting Algorithm", 
-        ("Facebook Prophet", "LSTM", "ARIMA (Coming Soon)")
+        ("Facebook Prophet", "XGBoost (Coming Soon)", "Moving Average (Coming Soon)" ,"LSTM")
     )
     
     run_button = st.button("Run Forecast", type="primary")
@@ -424,14 +424,15 @@ if run_button:
             with col1:
                 st.success("LSTM Network Trained!")
                 
-                # Formal, objective explanation
-                st.write(
-                    "Long Short-Term Memory (LSTM) is a recurrent neural network architecture specifically "
-                    "engineered for time-series forecasting. By employing specialized gating mechanisms to "
-                    "regulate information flow, the model is able to distinguish between significant long-term "
-                    "trends and short-term fluctuations, allowing it to effectively retain relevant historical "
-                    "dependencies throughout the sequence."
-                )
+                # --- REPLACEMENT START ---
+                st.write("**Features Used:**")
+                
+                # The LSTM implementation provided in this script is Univariate.
+                # It exclusively uses log returns derived from the Close price.
+                lstm_features = ['Log Returns (Close Price)']
+                
+                for feature in lstm_features:
+                    st.code(feature)
 
         # --- SHARED PLOTTING LOGIC ---
         if forecast_results is not None:
