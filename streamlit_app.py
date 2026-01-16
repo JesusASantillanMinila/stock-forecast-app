@@ -259,8 +259,7 @@ def run_prophet_competition(df, history_months):
 # --- RECURSIVE MOVING AVERAGE MODEL ---
 def run_moving_average_model(df, forecast_months):
     """
-    Forecasting by recursively updating the 50-day and 200-day averages
-    into the future.
+    Forecasting by recursively calculating 50-day average
     """
     future_days = forecast_months * 30
     last_date = pd.to_datetime(df['ds'].max())
@@ -271,7 +270,6 @@ def run_moving_average_model(df, forecast_months):
     
     # We calculate the volatility of the LAST 50 days of actual data
     # We will use this to draw the confidence intervals (expanding cone)
-    # This prevents the cone from "collapsing" due to the smoothness of averages
     initial_volatility_std = np.std(history[-50:])
     
     predictions = []
@@ -288,15 +286,8 @@ def run_moving_average_model(df, forecast_months):
         else:
             ma_50 = np.mean(history)
             
-        # 200-Day Recursive MA
-        if len(history) >= 200:
-            ma_200 = np.mean(history[-200:])
-        else:
-            # Fallback if history is short (e.g. IPOs)
-            ma_200 = np.mean(history)
-        
-        # 2. The Forecast is the average of these two trends
-        pred = (ma_50 + ma_200) / 2
+        # 2. The Forecast is purely the 50-day trend
+        pred = ma_50
         
         # 3. Calculate Uncertainty
         # We use the Square Root of Time rule for volatility expansion
@@ -308,8 +299,7 @@ def run_moving_average_model(df, forecast_months):
         upper_band.append(pred + (1.96 * uncertainty_factor)) # 95% Confidence
         lower_band.append(pred - (1.96 * uncertainty_factor))
         
-        # 4. CRITICAL STEP: Append prediction to history
-        # This means the next loop's MA calculation includes this prediction
+        # 4. Append prediction to history
         history.append(pred)
         
     df_fcst = pd.DataFrame({
@@ -485,15 +475,14 @@ if run_button:
 
         elif algo_choice == "Moving Average":
             # Run Moving Average Model
-            with st.spinner("Calculating Recursive Moving Averages..."):
+            with st.spinner("Calculating Recursive Moving Average..."):
                 forecast_results = run_moving_average_model(df_data, var_future_fcst_mo)
                 
             col1, col2 = st.columns([1, 2])
             with col1:
                 st.success("MA Projection Complete!")
                 st.write("**Features Used:**")
-                st.code("Forward-Looking 50-Day Mean")
-                st.code("Forward-Looking 200-Day Mean")
+                st.code("Recursive 50-Day Mean")
 
         elif algo_choice == "LSTM":
             # Run LSTM
