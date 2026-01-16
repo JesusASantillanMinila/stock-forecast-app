@@ -36,7 +36,7 @@ with st.sidebar:
     
     algo_choice = st.selectbox(
         "Forecasting Algorithm", 
-        ("Facebook Prophet", "XGBoost (Coming Soon)", "Moving Average (Coming Soon)" ,"LSTM")
+        ("Facebook Prophet", "Moving Average", "LSTM", "XGBoost (Coming Soon)")
     )
     
     run_button = st.button("Run Forecast", type="primary")
@@ -256,6 +256,42 @@ def run_prophet_competition(df, history_months):
     
     return best_model, best_regressor_combo, best_rmse, pd.DataFrame(results_log)
 
+# --- MOVING AVERAGE MODEL FUNCTION ---
+def run_moving_average_model(df, forecast_months):
+    """
+    Forecasting based on simple projection of 50-day and 200-day Moving Averages.
+    """
+    future_days = forecast_months * 30
+    last_date = pd.to_datetime(df['ds'].max())
+    future_dates = [last_date + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
+    
+    # Get latest MA values (Naive Forecast Strategy)
+    last_ma50 = df['Moving Average 50 Days'].iloc[-1]
+    last_ma200 = df['Moving Average 200 Days'].iloc[-1]
+    last_price = df['y'].iloc[-1]
+    
+    # Calculate historical volatility for confidence intervals
+    daily_vol = df['y'].pct_change().std()
+    
+    # Define Forecast (yhat) as the average of the two MAs
+    # This represents a "consensus" trend line between short and long term
+    forecast_values = (last_ma50 + last_ma200) / 2
+    
+    # Create Uncertainty Cone
+    # 1. Base Spread: The distance between 50MA and 200MA (wider spread = more uncertainty)
+    # 2. Time decay: Volatility * sqrt(t)
+    base_spread = abs(last_ma50 - last_ma200) / 2
+    uncertainty = np.array([last_price * daily_vol * np.sqrt(t) for t in range(1, future_days + 1)])
+    
+    df_fcst = pd.DataFrame({
+        'ds': future_dates,
+        'yhat': forecast_values,
+        'yhat_upper': forecast_values + base_spread + uncertainty,
+        'yhat_lower': forecast_values - base_spread - uncertainty
+    })
+    
+    return df_fcst
+
 # --- LSTM TRAINING FUNCTION ---
 def run_lstm_model(df, forecast_months):
     """
@@ -361,10 +397,12 @@ def run_lstm_model(df, forecast_months):
         'yhat_lower': future_prices.flatten() - (uncertainty_cone * 1.96)
     })
     
-    return forecast_df# --- MAIN APP LOGIC ---
+    return forecast_df
+
+# --- MAIN APP LOGIC ---
 
 if run_button:
-    if algo_choice == "ARIMA (Coming Soon)":
+    if algo_choice == "XGBoost (Coming Soon)":
         st.warning(f"{algo_choice} is not yet implemented.")
         st.stop()
 
@@ -416,6 +454,18 @@ if run_button:
                 # Filter only for future part for plotting consistency with LSTM logic
                 forecast_results = full_forecast[full_forecast['ds'] > pd.Timestamp(df_data['ds'].max())]
 
+        elif algo_choice == "Moving Average":
+            # Run Moving Average Model
+            with st.spinner("Calculating Moving Averages..."):
+                forecast_results = run_moving_average_model(df_data, var_future_fcst_mo)
+                
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.success("MA Projection Complete!")
+                st.write("**Features Used:**")
+                st.code("50-Day Moving Average")
+                st.code("200-Day Moving Average")
+
         elif algo_choice == "LSTM":
             # Run LSTM
             with st.spinner("Training Multivariate LSTM Neural Network"):
@@ -423,14 +473,8 @@ if run_button:
             col1, col2 = st.columns([1, 2])
             with col1:
                 st.success("LSTM Network Trained!")
-                
-                # --- REPLACEMENT START ---
                 st.write("**Features Used:**")
-                
-                # The LSTM implementation provided in this script is Univariate.
-                # It exclusively uses log returns derived from the Close price.
                 lstm_features = ['Log Returns (Close Price)']
-                
                 for feature in lstm_features:
                     st.code(feature)
 
