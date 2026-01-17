@@ -6,4 +6,4 @@ prophet
 plotly
 tensorflow
 scikit-learn
-pmdarima
+xgboost
