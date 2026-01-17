@@ -448,7 +448,10 @@ def run_xgboost_model(df, forecast_months):
     df_xgb['ma_dist'] = (df_xgb['y'] - df_xgb['Moving Average 50 Days']) / df_xgb['Moving Average 50 Days']
 
     # 2. Lag Generation (Create features for t-1)
-    features = ['log_ret', 'vol_change', 'ma_dist']
+    features = ['log_ret'
+                , 'vol_change'
+                # , 'ma_dist'
+               ]
     
     for f in features:
         df_xgb[f'{f}_lag1'] = df_xgb[f].shift(1)
@@ -625,7 +628,10 @@ if run_button:
             with col1:
                 st.success("XGBoost Model Trained!")
                 st.write("**Features Used:**")
-                xgb_features = ['Log Returns', 'Volume Change', 'Distance to 50-Day Average', 'Cyclical Month']
+                xgb_features = ['Log Returns'
+                                , 'Volume Change'
+                                # , 'Distance to 50-Day Average'
+                                , 'Cyclical Month']
                 for feature in xgb_features:
                     st.code(feature)
 
