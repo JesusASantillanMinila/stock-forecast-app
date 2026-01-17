@@ -429,6 +429,11 @@ def run_xgboost_model(df, forecast_months):
     """
     df_xgb = df.copy()
     
+    # --- FIX STARTS HERE ---
+    # Force 'ds' to be datetime64[ns] so .dt accessor works
+    df_xgb['ds'] = pd.to_datetime(df_xgb['ds'])
+    # --- FIX ENDS HERE ---
+    
     # 1. Feature Engineering (Target: Log Return)
     df_xgb['log_ret'] = np.log(df_xgb['y'] / df_xgb['y'].shift(1))
     
@@ -440,11 +445,9 @@ def run_xgboost_model(df, forecast_months):
     df_xgb['month_cos'] = np.cos(2 * np.pi * df_xgb['ds'].dt.month / 12)
     
     # Moving Average Feature (Percent distance from MA 50)
-    # We use this to normalize trend info
     df_xgb['ma_dist'] = (df_xgb['y'] - df_xgb['Moving Average 50 Days']) / df_xgb['Moving Average 50 Days']
 
     # 2. Lag Generation (Create features for t-1)
-    # The model predicts Return_t using info from t-1
     features = ['log_ret', 'vol_change', 'ma_dist']
     
     for f in features:
@@ -454,7 +457,6 @@ def run_xgboost_model(df, forecast_months):
     df_train = df_xgb.dropna()
     
     # Define Predictors (X) and Target (y)
-    # We include cyclical time features and lagged technicals
     X_cols = [f'{f}_lag1' for f in features] + ['month_sin', 'month_cos']
     X = df_train[X_cols]
     y = df_train['log_ret']
@@ -472,37 +474,28 @@ def run_xgboost_model(df, forecast_months):
     # 4. Recursive Forecasting Loop
     future_days = forecast_months * 30
     
-    # Start with the last available data row
     last_row = df_xgb.iloc[-1]
-    
-    # Trackers for recursive calculation
     current_price = last_row['y']
-    
-    # History needed to update Moving Averages dynamically
     price_history = df_xgb['y'].tolist()
     
-    # Current "Yesterday" values for the first prediction
     curr_log_ret = last_row['log_ret']
     curr_vol_change = last_row['vol_change']
     curr_ma_50 = last_row['Moving Average 50 Days']
+    
+    # Ensure curr_date is a Timestamp
     curr_date = pd.to_datetime(last_row['ds'])
     
     future_log_rets = []
     
     for _ in range(future_days):
         
-        # Increment Date
         next_date = curr_date + datetime.timedelta(days=1)
         
-        # Calculate Cyclical features for the NEW date
         next_month_sin = np.sin(2 * np.pi * next_date.month / 12)
         next_month_cos = np.cos(2 * np.pi * next_date.month / 12)
         
-        # Calculate MA distance
         curr_ma_dist = (current_price - curr_ma_50) / curr_ma_50
         
-        # Create Input Vector
-        # We use current values as the "Lag 1" features for the prediction
         input_data = pd.DataFrame([{
             'log_ret_lag1': curr_log_ret,
             'vol_change_lag1': curr_vol_change,
@@ -511,38 +504,31 @@ def run_xgboost_model(df, forecast_months):
             'month_cos': next_month_cos
         }])
         
-        # Predict Return
         pred_log_ret = model.predict(input_data)[0]
         future_log_rets.append(pred_log_ret)
         
-        # Update State for next iteration
-        # 1. Price
         next_price = current_price * np.exp(pred_log_ret)
         price_history.append(next_price)
         
-        # 2. Moving Average (Recalculate using updated history)
         new_ma_50 = np.mean(price_history[-50:])
-        
-        # 3. Volume Change (Assumption: Flat volume for future to reduce noise)
         next_vol_change = 0.0
         
-        # Update variables for next loop
         current_price = next_price
         curr_log_ret = pred_log_ret
         curr_vol_change = next_vol_change
         curr_ma_50 = new_ma_50
         curr_date = next_date
 
-    # 5. Reconstruct Prices and Uncertainty
+    # 5. Reconstruct Prices
     last_actual_price = df_xgb['y'].iloc[-1]
     future_cumulative_growth = np.exp(np.cumsum(future_log_rets))
     future_prices = last_actual_price * future_cumulative_growth
     
     # Generate Dates
+    # Ensure start date is datetime64
     last_date_dataset = pd.to_datetime(df['ds'].max())
     future_dates_list = [last_date_dataset + datetime.timedelta(days=x) for x in range(1, future_days + 1)]
 
-    # Uncertainty (Standard Volatility Cone approach)
     hist_volatility = df_train['log_ret'].std()
     uncertainty_cone = np.array([hist_volatility * last_actual_price * np.sqrt(t) for t in range(1, future_days + 1)])
     
