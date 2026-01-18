@@ -5,6 +5,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 import datetime
 import time
+import random
 
 # --- XGBoost ---
 import xgboost as xgb 
@@ -29,13 +30,43 @@ st.title("Stock Forecasting Engine")
 # --- placeholder for company info ---
 company_info_placeholder = st.empty()
 
+# --- SAMPLE TICKERS FOR RANDOM SELECTION ---
+# Load the file
+df_tick_sample = pd.read_csv('tickers_samples.csv')
+
+# Convert the single column directly to a list
+lst_ticker = df_tick_sample['Ticker'].tolist()
+
+
 # --- CONFIGURATION INPUTS ---
 with st.expander("Configuration", expanded=True):
 
     col1, col2 = st.columns(2)
     
     with col1:
-        var_ticker_input = st.text_input("Stock Ticker", value="").upper()
+        # --- LOGIC FOR RANDOM BUTTON ---
+        # 1. Initialize session state if it doesn't exist
+        if "ticker_input" not in st.session_state:
+            st.session_state.ticker_input = ""
+
+        # 2. Define the callback function to update the state
+        def set_random_ticker():
+            if lst_ticker:
+                st.session_state.ticker_input = random.choice(lst_ticker)
+
+        # 3. Create a layout for Input + Button side-by-side
+        input_col, btn_col = st.columns([0.85, 0.15])
+        
+        with input_col:
+            # We remove 'value=' and use 'key=' to bind it to the session state
+            var_ticker_input = st.text_input("Stock Ticker", key="ticker_input").upper()
+        
+        with btn_col:
+            # Vertical spacer to align button with input box
+            st.write("") 
+            st.write("") 
+            st.button("Use Random Example", on_click=set_random_ticker, help="Use Random Example")
+
         algo_choice = st.selectbox(
             "Forecasting Algorithm", 
             ("Facebook Prophet", "XGBoost", "LSTM", "Moving Average")
