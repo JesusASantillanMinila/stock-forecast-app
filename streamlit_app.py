@@ -53,7 +53,7 @@ with st.expander("Configuration", expanded=True):
             st.session_state.ticker_input = random.choice(lst_ticker)
 
     # 3. BUTTON AT THE TOP (Full Width)
-    st.button("🎲 Use Random Example Ticker", 
+    st.button("Use Random Example Ticker", 
               on_click=set_random_ticker, 
               help="Auto-fill a random ticker from the database",
               use_container_width=True)
