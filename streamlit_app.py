@@ -36,13 +36,14 @@ with st.expander("Configuration", expanded=True):
     
     with col1:
         var_ticker_input = st.text_input("Stock Ticker", value="").upper()
-        var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=12, step=6)
-        
-    with col2:
         algo_choice = st.selectbox(
             "Forecasting Algorithm", 
             ("Facebook Prophet", "XGBoost", "LSTM", "Moving Average")
         )
+
+        
+    with col2:
+        var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=12, step=6)        
         var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=1, step=1)
     
 
