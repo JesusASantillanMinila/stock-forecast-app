@@ -450,7 +450,7 @@ def run_xgboost_model(df, forecast_months):
     # 2. Lag Generation (Create features for t-1)
     features = ['log_ret'
                 , 'vol_change'
-                # , 'ma_dist'
+                , 'ma_dist'
                ]
     
     for f in features:
@@ -630,7 +630,7 @@ if run_button:
                 st.write("**Features Used:**")
                 xgb_features = ['Log Returns'
                                 , 'Volume Change'
-                                # , 'Distance to 50-Day Average'
+                                , 'Distance to 50-Day Average'
                                 , 'Cyclical Month']
                 for feature in xgb_features:
                     st.code(feature)
