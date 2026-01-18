@@ -32,41 +32,40 @@ company_info_placeholder = st.empty()
 
 # --- SAMPLE TICKERS FOR RANDOM SELECTION ---
 # Load the file
-df_tick_sample = pd.read_csv('ticker_samples.csv')
-
-# Convert the single column directly to a list
-lst_ticker = df_tick_sample['Ticker'].tolist()
-
+try:
+    df_tick_sample = pd.read_csv('ticker_samples.csv')
+    lst_ticker = df_tick_sample['Ticker'].tolist()
+except:
+    # Fallback if file doesn't exist
+    lst_ticker = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "JPM", "V", "JNJ", "WMT"]
 
 # --- CONFIGURATION INPUTS ---
 with st.expander("Configuration", expanded=True):
 
+    # --- LOGIC FOR RANDOM BUTTON ---
+    # 1. Initialize session state if it doesn't exist
+    if "ticker_input" not in st.session_state:
+        st.session_state.ticker_input = ""
+
+    # 2. Define the callback function to update the state
+    def set_random_ticker():
+        if lst_ticker:
+            st.session_state.ticker_input = random.choice(lst_ticker)
+
+    # 3. BUTTON AT THE TOP (Full Width)
+    st.button("🎲 Use Random Example Ticker", 
+              on_click=set_random_ticker, 
+              help="Auto-fill a random ticker from the database",
+              use_container_width=True)
+    
+    st.write("") # Spacer
+
     col1, col2 = st.columns(2)
     
     with col1:
-        # --- LOGIC FOR RANDOM BUTTON ---
-        # 1. Initialize session state if it doesn't exist
-        if "ticker_input" not in st.session_state:
-            st.session_state.ticker_input = ""
-
-        # 2. Define the callback function to update the state
-        def set_random_ticker():
-            if lst_ticker:
-                st.session_state.ticker_input = random.choice(lst_ticker)
-
-        # 3. Create a layout for Input + Button side-by-side
-        input_col, btn_col = st.columns([0.85, 0.15])
-        
-        with input_col:
-            # We remove 'value=' and use 'key=' to bind it to the session state
-            var_ticker_input = st.text_input("Stock Ticker", key="ticker_input").upper()
-        
-        with btn_col:
-            # Vertical spacer to align button with input box
-            st.write("") 
-            st.write("") 
-            st.button("Use Random Example", on_click=set_random_ticker, help="Use Random Example")
-
+        # We remove 'value=' and use 'key=' to bind it to the session state
+        var_ticker_input = st.text_input("Stock Ticker", key="ticker_input").upper()
+    
         algo_choice = st.selectbox(
             "Forecasting Algorithm", 
             ("Facebook Prophet", "XGBoost", "LSTM", "Moving Average")
