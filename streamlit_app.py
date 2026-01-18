@@ -29,20 +29,24 @@ st.title("Stock Forecasting Engine")
 # --- placeholder for company info ---
 company_info_placeholder = st.empty()
 
-# --- SIDEBAR INPUTS ---
-with st.sidebar:
-    st.header("Configuration")
+# --- CONFIGURATION INPUTS ---
+with st.expander("Configuration", expanded=True):
+
+    col1, col2 = st.columns(2)
     
-    var_ticker_input = st.text_input("Stock Ticker", value="").upper()
-    var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=12, step=6)
-    var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=1, step=1)
+    with col1:
+        var_ticker_input = st.text_input("Stock Ticker", value="").upper()
+        var_past_horizon_mo = st.number_input("History Lookback (Months)", min_value=12, value=12, step=6)
+        
+    with col2:
+        algo_choice = st.selectbox(
+            "Forecasting Algorithm", 
+            ("Facebook Prophet", "XGBoost", "LSTM", "Moving Average")
+        )
+        var_future_fcst_mo = st.number_input("Future Forecast (Months)", min_value=1, value=1, step=1)
     
-    algo_choice = st.selectbox(
-        "Forecasting Algorithm", 
-        ("Facebook Prophet", "Moving Average", "LSTM", "XGBoost")
-    )
-    
-    run_button = st.button("Run Forecast", type="primary")
+
+    run_button = st.button("Run Forecast", type="primary", use_container_width=True)
 
 # --- DATA LOADING FUNCTION ---
 @st.cache_data(ttl=3600) 
