@@ -32,7 +32,7 @@ company_info_placeholder = st.empty()
 
 # --- SAMPLE TICKERS FOR RANDOM SELECTION ---
 # Load the file
-df_tick_sample = pd.read_csv('tickers_samples.csv')
+df_tick_sample = pd.read_csv('ticker_samples.csv')
 
 # Convert the single column directly to a list
 lst_ticker = df_tick_sample['Ticker'].tolist()
