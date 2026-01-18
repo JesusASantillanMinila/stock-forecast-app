@@ -94,9 +94,9 @@ def get_stock_data(ticker, months):
         try:
             
             t_info = var_ticker_class.info
-            time.sleep(1)
+            time.sleep(2)
             var_long_name = t_info.get("longName", ticker)
-            time.sleep(1)
+            time.sleep(2)
             var_business_summary = t_info.get("longBusinessSummary", "No summary available. Too Many API  Requests. Rate limited. Try after a while.")
             
             metadata = {
