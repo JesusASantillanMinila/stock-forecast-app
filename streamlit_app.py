@@ -701,3 +701,7 @@ if run_button:
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
+
+# --- FOOTER / DISCLAIMER ---
+st.divider()
+st.caption("Disclaimer: All stock forecasts and projections provided are for informational and educational purposes only and are not guaranteed. Past performance is not indicative of future results. This is not investment, financial, or trading advice. Always conduct your own research or consult a licensed financial professional before making any investment decisions. You assume full responsibility for any actions taken based on this information.")
