@@ -5,6 +5,10 @@ on:
     - cron: "0 */3 * * *"  # Runs every 3 hours
   workflow_dispatch:       # Allows you to trigger it manually if needed
 
+# Add explicitly scoped permissions here:
+permissions:
+  contents: write
+
 jobs:
   keep-awake:
     runs-on: ubuntu-latest
